@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/uploads/
+
+# Env files
+.env
+**/.env
+!**/.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Build
+/dist
+/.inngest
+
+# App key
+backend/data/appkey.hex

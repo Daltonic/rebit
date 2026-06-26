@@ -1,0 +1,111 @@
+import { Job, SiaStatus } from '../types';
+
+export const mockSiaStatus: SiaStatus = {
+  connected: false,
+  demoMode: true,
+  indexerUrl: null,
+};
+
+// All URLs below are from archive.org — publicly accessible, CORS-open, no auth required
+const VIDEOS = {
+  bunny: 'https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4',
+  elephant: 'https://archive.org/download/ElephantsDream/ed_1024_512kb.mp4',
+  tears: 'https://archive.org/download/TOS-pilot/TOS-pilot.mp4',
+};
+
+export const mockJobs: Job[] = [
+  {
+    id: 'job_01jx4k2m',
+    status: 'complete',
+    sourceFilename: 'founder-interview-ep42.mp4',
+    sourceUrl: VIDEOS.bunny,
+    sourceSiaObjectId: 'sia_abc123def456',
+    durationSeconds: 3540,
+    createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+    updatedAt: new Date(Date.now() - 3600000 * 1).toISOString(),
+    _count: { segments: 7 },
+    pipelineSteps: [
+      { id: 's1', jobId: 'job_01jx4k2m', stage: 'upload', status: 'complete', progressPct: 100, message: 'Uploaded 847 MB', startedAt: new Date(Date.now() - 7200000).toISOString(), completedAt: new Date(Date.now() - 6900000).toISOString() },
+      { id: 's2', jobId: 'job_01jx4k2m', stage: 'transcribe', status: 'complete', progressPct: 100, message: 'Transcript generated — 3,847 words', startedAt: new Date(Date.now() - 6900000).toISOString(), completedAt: new Date(Date.now() - 5400000).toISOString() },
+      { id: 's3', jobId: 'job_01jx4k2m', stage: 'detect', status: 'complete', progressPct: 100, message: '7 highlights detected', startedAt: new Date(Date.now() - 5400000).toISOString(), completedAt: new Date(Date.now() - 4800000).toISOString() },
+      { id: 's4', jobId: 'job_01jx4k2m', stage: 'extract', status: 'complete', progressPct: 100, message: '7 clips extracted', startedAt: new Date(Date.now() - 4800000).toISOString(), completedAt: new Date(Date.now() - 4200000).toISOString() },
+      { id: 's5', jobId: 'job_01jx4k2m', stage: 'render', status: 'complete', progressPct: 100, message: '7 clips rendered to 9:16', startedAt: new Date(Date.now() - 4200000).toISOString(), completedAt: new Date(Date.now() - 3800000).toISOString() },
+      { id: 's6', jobId: 'job_01jx4k2m', stage: 'store', status: 'complete', progressPct: 100, message: 'All outputs pinned to Sia', startedAt: new Date(Date.now() - 3800000).toISOString(), completedAt: new Date(Date.now() - 3600000).toISOString() },
+    ],
+    segments: [
+      {
+        id: 'seg_001', jobId: 'job_01jx4k2m',
+        startSeconds: 10, endSeconds: 70,
+        hookStrength: 'Strong', viralityScore: 91, emotionalSignal: 'Conviction',
+        transcriptExcerpt: "The moment we decided to stop taking VC money was the moment we started actually building for users. That's when everything changed for us.",
+        status: 'approved', clipPath: '/clips/clip_001.mp4', siaObjectId: 'sia_clip_001', createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'seg_002', jobId: 'job_01jx4k2m',
+        startSeconds: 80, endSeconds: 136,
+        hookStrength: 'Strong', viralityScore: 87, emotionalSignal: 'Surprise',
+        transcriptExcerpt: "We went from zero to a million ARR without a single marketing dollar. The whole thing was just word of mouth and a really good product.",
+        status: 'approved', clipPath: '/clips/clip_002.mp4', siaObjectId: 'sia_clip_002', createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'seg_003', jobId: 'job_01jx4k2m',
+        startSeconds: 140, endSeconds: 194,
+        hookStrength: 'Moderate', viralityScore: 74, emotionalSignal: 'Frustration',
+        transcriptExcerpt: "Every startup advice I got in the beginning was wrong. Wrong for our market, wrong for our team size, wrong for the problem we were solving.",
+        status: 'pending', clipPath: '/clips/clip_003.mp4', siaObjectId: null, createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'seg_004', jobId: 'job_01jx4k2m',
+        startSeconds: 200, endSeconds: 258,
+        hookStrength: 'Strong', viralityScore: 83, emotionalSignal: 'Excitement',
+        transcriptExcerpt: "Open source wasn't a marketing strategy — it was a survival strategy. We open sourced it because we couldn't afford sales.",
+        status: 'pending', clipPath: '/clips/clip_004.mp4', siaObjectId: null, createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'seg_005', jobId: 'job_01jx4k2m',
+        startSeconds: 260, endSeconds: 316,
+        hookStrength: 'Moderate', viralityScore: 68, emotionalSignal: 'Reflection',
+        transcriptExcerpt: "The biggest mistake founders make is optimizing for funding rounds instead of optimizing for actual product-market fit.",
+        status: 'rejected', clipPath: '/clips/clip_005.mp4', siaObjectId: null, createdAt: new Date().toISOString(),
+      },
+    ],
+  },
+  {
+    id: 'job_02ab9n1p',
+    status: 'transcribing',
+    sourceFilename: 'product-demo-q3-2026.mov',
+    sourceUrl: VIDEOS.elephant,
+    sourceSiaObjectId: null,
+    durationSeconds: 2280,
+    createdAt: new Date(Date.now() - 1800000).toISOString(),
+    updatedAt: new Date(Date.now() - 300000).toISOString(),
+    _count: { segments: 0 },
+    pipelineSteps: [
+      { id: 's7', jobId: 'job_02ab9n1p', stage: 'upload', status: 'complete', progressPct: 100, message: 'Uploaded 1.2 GB', startedAt: new Date(Date.now() - 1800000).toISOString(), completedAt: new Date(Date.now() - 1500000).toISOString() },
+      { id: 's8', jobId: 'job_02ab9n1p', stage: 'transcribe', status: 'running', progressPct: 64, message: 'Transcribing… 64% complete', startedAt: new Date(Date.now() - 1500000).toISOString(), completedAt: null },
+      { id: 's9', jobId: 'job_02ab9n1p', stage: 'detect', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
+      { id: 's10', jobId: 'job_02ab9n1p', stage: 'extract', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
+      { id: 's11', jobId: 'job_02ab9n1p', stage: 'render', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
+      { id: 's12', jobId: 'job_02ab9n1p', stage: 'store', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
+    ],
+  },
+  {
+    id: 'job_03cd5r7q',
+    status: 'failed',
+    sourceFilename: 'internal-all-hands-june.webm',
+    sourceUrl: VIDEOS.tears,
+    sourceSiaObjectId: null,
+    durationSeconds: 5400,
+    createdAt: new Date(Date.now() - 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 82800000).toISOString(),
+    _count: { segments: 0 },
+    pipelineSteps: [
+      { id: 's13', jobId: 'job_03cd5r7q', stage: 'upload', status: 'complete', progressPct: 100, message: 'Uploaded 2.1 GB', startedAt: new Date(Date.now() - 86400000).toISOString(), completedAt: new Date(Date.now() - 85800000).toISOString() },
+      { id: 's14', jobId: 'job_03cd5r7q', stage: 'transcribe', status: 'failed', progressPct: 0, message: 'Whisper error: audio codec not supported. Try re-encoding to AAC.', startedAt: new Date(Date.now() - 85800000).toISOString(), completedAt: new Date(Date.now() - 85600000).toISOString() },
+      { id: 's15', jobId: 'job_03cd5r7q', stage: 'detect', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
+      { id: 's16', jobId: 'job_03cd5r7q', stage: 'extract', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
+      { id: 's17', jobId: 'job_03cd5r7q', stage: 'render', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
+      { id: 's18', jobId: 'job_03cd5r7q', stage: 'store', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
+    ],
+  },
+];
