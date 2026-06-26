@@ -1,5 +1,5 @@
 'use client';
-import { useSyncExternalStore } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Job, JobStatus } from '@/lib/types';
 import { ArrowRight, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, Video } from 'lucide-react';
@@ -26,18 +26,20 @@ function formatDuration(s: number | null) {
   return `${m}m`;
 }
 
-function subscribeToClock(cb: () => void) {
-  const id = setInterval(cb, 30_000);
-  return () => clearInterval(id);
-}
-
-function getClockSnapshot() {
-  return Date.now();
-}
-
 function TimeAgo({ iso }: { iso: string }) {
-  const now = useSyncExternalStore(subscribeToClock, getClockSnapshot);
-  const diff = now - new Date(iso).getTime();
+  const [now, setNow] = useState<number | null>(null);
+
+  useEffect(() => {
+    const update = () => setNow(Date.now());
+    update();
+    const id = setInterval(update, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // During SSR and first client render, now is null.
+  // Using iso's timestamp as the fallback ensures both sides compute the same
+  // diff (0 → "just now"), avoiding hydration mismatches.
+  const diff = (now ?? new Date(iso).getTime()) - new Date(iso).getTime();
   const m = Math.floor(diff / 60000);
   if (m < 1) return <>just now</>;
   if (m < 60) return <>{m}m ago</>;
