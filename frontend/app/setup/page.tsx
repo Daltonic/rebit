@@ -1,13 +1,15 @@
 'use client';
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, ChevronRight, Eye, EyeOff, Zap, Server, Key, User, Shield } from 'lucide-react';
+import { startRegistration } from '@simplewebauthn/browser';
+import { Check, ChevronRight, Eye, EyeOff, Zap, Server, Key, User, Shield, Fingerprint, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 const STEPS = [
   { label: 'Sia Indexer', icon: Server, desc: 'Connect to your Sia indexer' },
   { label: 'App Key', icon: Key, desc: 'Derive your storage key' },
   { label: 'Password', icon: Shield, desc: 'Secure your instance' },
   { label: 'Account', icon: User, desc: 'Create the admin user' },
+  { label: 'Passkey', icon: Fingerprint, desc: 'Enroll your biometrics' },
 ];
 
 export default function SetupPage() {
@@ -22,9 +24,23 @@ export default function SetupPage() {
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
 
-  const next = () => {
-    if (step < STEPS.length - 1) setStep(s => s + 1);
-    else router.push('/upload');
+  // Passkey state
+  const [passkeyStatus, setPasskeyStatus] = useState<'idle' | 'enrolling' | 'success' | 'error'>('idle');
+  const [passkeyMessage, setPasskeyMessage] = useState('');
+
+  const next = async () => {
+    if (step < STEPS.length - 1) {
+      // If moving to the passkey step, trigger enrollment automatically
+      if (step === STEPS.length - 2) {
+        setStep(s => s + 1);
+        // Auto-trigger enrollment after a brief moment for the UI to render
+        setTimeout(() => handleEnrollPasskey(), 300);
+      } else {
+        setStep(s => s + 1);
+      }
+    } else {
+      router.push('/upload');
+    }
   };
 
   const canNext = [
@@ -32,7 +48,65 @@ export default function SetupPage() {
     mnemonic.split(' ').length >= 12 || appKeyConfirmed,
     password.length >= 8,
     username.length >= 2,
+    passkeyStatus === 'success' || passkeyStatus === 'idle', // optional but encouraged
   ][step];
+
+  const handleEnrollPasskey = useCallback(async () => {
+    // Check if WebAuthn is supported
+    if (typeof window === 'undefined' || !window.PublicKeyCredential) {
+      setPasskeyStatus('idle');
+      setPasskeyMessage('Passkeys not supported on this browser. You can skip this step.');
+      return;
+    }
+
+    setPasskeyStatus('enrolling');
+    setPasskeyMessage('');
+
+    try {
+      // Step 1: Get registration options (the user must be signed in with the session)
+      // Since this is setup, we need a different strategy. We'll generate a temporary
+      // registration by first creating the user via an API call
+      const beginRes = await fetch('/api/auth/passkey/register/begin');
+      if (!beginRes.ok) {
+        // If not authorized (no session yet during setup), show a message
+        // telling them they can enroll later in Settings
+        setPasskeyStatus('idle');
+        setPasskeyMessage('You can enroll a passkey later from the Settings page after logging in.');
+        return;
+      }
+
+      const options = await beginRes.json();
+
+      // Step 2: Trigger the native biometric dialogue (fingerprint / Face ID / Windows Hello)
+      const regResponse = await startRegistration(options);
+
+      // Step 3: Send the response back to the server for verification
+      const completeRes = await fetch('/api/auth/passkey/register/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(regResponse),
+      });
+
+      if (!completeRes.ok) {
+        const data = await completeRes.json();
+        throw new Error(data.error || 'Registration verification failed.');
+      }
+
+      setPasskeyStatus('success');
+      setPasskeyMessage('Passkey enrolled successfully! Your fingerprint is now registered.');
+    } catch (err: any) {
+      if (err.name === 'AbortError' || err.name === 'NotAllowedError') {
+        setPasskeyStatus('idle');
+        setPasskeyMessage('Passkey enrollment was cancelled. You can enroll later from Settings.');
+      } else if (err.message?.includes('Unauthorized')) {
+        setPasskeyStatus('idle');
+        setPasskeyMessage('You can enroll a passkey later from the Settings page after logging in.');
+      } else {
+        setPasskeyStatus('error');
+        setPasskeyMessage(err.message || 'Enrollment failed. You can try again later from Settings.');
+      }
+    }
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4 py-12">
@@ -52,7 +126,7 @@ export default function SetupPage() {
           First-time setup
         </h1>
         <p className="text-sm text-center mb-8" style={{ color: 'var(--text-muted)' }}>
-          Get your instance running in 4 steps.
+          Get your instance running in 5 steps.
         </p>
 
         {/* Step indicators */}
@@ -182,6 +256,78 @@ export default function SetupPage() {
               </div>
               <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 This is the first and admin account. Additional accounts can be created later.
+              </p>
+            </div>
+          )}
+
+          {/* Step 4 — Passkey Enrollment */}
+          {step === 4 && (
+            <div className="space-y-4">
+              <div
+                className="flex items-center gap-3 px-4 py-3 rounded-lg text-sm"
+                style={{
+                  background: passkeyStatus === 'success'
+                    ? 'rgba(16,185,129,0.1)'
+                    : passkeyStatus === 'enrolling'
+                      ? 'rgba(59,130,246,0.1)'
+                      : passkeyStatus === 'error'
+                        ? 'rgba(239,68,68,0.1)'
+                        : 'var(--bg-elevated)',
+                  border: `1px solid ${
+                    passkeyStatus === 'success'
+                      ? 'rgba(16,185,129,0.2)'
+                      : passkeyStatus === 'enrolling'
+                        ? 'rgba(59,130,246,0.2)'
+                        : passkeyStatus === 'error'
+                          ? 'rgba(239,68,68,0.2)'
+                          : 'var(--border)'
+                  }`,
+                }}
+              >
+                {passkeyStatus === 'enrolling' ? (
+                  <Loader2 size={16} className="animate-spin" style={{ color: 'var(--info)' }} />
+                ) : passkeyStatus === 'success' ? (
+                  <CheckCircle2 size={16} style={{ color: 'var(--success)' }} />
+                ) : (
+                  <Fingerprint size={16} style={{ color: 'var(--text-secondary)' }} />
+                )}
+                <div>
+                  <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                    {passkeyStatus === 'enrolling'
+                      ? 'Opening biometric dialogue...'
+                      : passkeyStatus === 'success'
+                        ? 'Passkey enrolled!'
+                        : passkeyStatus === 'error'
+                          ? 'Enrollment failed'
+                          : 'Optional: Enroll your device passkey'}
+                  </p>
+                  {passkeyMessage && (
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                      {passkeyMessage}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {passkeyStatus === 'idle' && (
+                <button
+                  onClick={handleEnrollPasskey}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all"
+                  style={{
+                    background: 'var(--accent)',
+                    color: 'white',
+                    boxShadow: '0 0 16px var(--accent-glow)',
+                  }}
+                >
+                  <Fingerprint size={14} />
+                  Enroll my fingerprint
+                </button>
+              )}
+
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                {passkeyStatus === 'success'
+                  ? 'Your fingerprint is now registered. You can sign in with just your biometrics.'
+                  : 'This will pop up your device\'s fingerprint, Face ID, or Windows Hello dialogue. You can also do this later in Settings.'}
               </p>
             </div>
           )}
