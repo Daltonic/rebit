@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import Sidebar from '@/components/Sidebar';
+import TopNav from '@/components/TopNav';
 import SessionProvider from '@/components/SessionProvider';
 import { auth } from '@/lib/auth/auth';
 
@@ -25,7 +26,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body>
         <SessionProvider session={session}>
           <Sidebar />
-          <main>{children}</main>
+          <TopNav />
+          <main className="pt-14">{children}</main>
         </SessionProvider>
       </body>
     </html>

@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useSession, signOut } from 'next-auth/react';
-import { Upload, LayoutGrid, Zap, LogOut, Settings } from 'lucide-react';
+import { useSession } from 'next-auth/react';
+import { Upload, LayoutGrid, Zap, Settings } from 'lucide-react';
 import { useState } from 'react';
 
 const NAV_ITEMS = [
@@ -81,44 +81,10 @@ export default function Sidebar() {
 
         {/* Bottom section */}
         <div className="px-2 py-3 border-t space-y-2" style={{ borderColor: 'var(--border)' }}>
-          {/* User info */}
-          {session?.user && (
-            <div className="flex items-center gap-3 px-3 py-2">
-              <div
-                className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0"
-                style={{ background: 'var(--accent)', color: 'white' }}
-              >
-                {session.user.name?.[0]?.toUpperCase() || 'U'}
-              </div>
-              {!collapsed && (
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-                    {session.user.name || 'User'}
-                  </p>
-                  <p className="text-xs truncate" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)', fontSize: '0.65rem' }}>
-                    {session.user.email || ''}
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Sign out */}
-          <button
-            onClick={() => signOut({ callbackUrl: '/' })}
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-all"
-            style={{ color: 'var(--text-muted)' }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; }}
-          >
-            <LogOut size={14} />
-            {!collapsed && <span>Sign out</span>}
-          </button>
-
           {/* Collapse toggle */}
           <button
             onClick={() => setCollapsed(c => !c)}
-            className="w-full flex items-center justify-center py-1 rounded text-xs"
+            className="w-full flex items-center justify-center py-1 rounded text-xs cursor-pointer"
             style={{ color: 'var(--text-muted)' }}
           >
             {collapsed ? '→' : '←'}

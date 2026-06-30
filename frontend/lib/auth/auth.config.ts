@@ -28,12 +28,18 @@ export const authConfig: NextAuthConfig = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
+        token.picture = user.image;
+        token.name = user.name;
+        token.email = user.email;
       }
       return token;
     },
     session({ session, token }) {
       if (session.user) {
         session.user.id = token.id as string;
+        if (token.picture) session.user.image = token.picture;
+        if (token.name) session.user.name = token.name;
+        if (token.email) session.user.email = token.email;
       }
       return session;
     },
