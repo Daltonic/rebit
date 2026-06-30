@@ -3,8 +3,8 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSession, signOut } from 'next-auth/react';
-import { Upload, LayoutGrid, Zap, LogOut, Settings, Fingerprint } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { Upload, LayoutGrid, Zap, LogOut, Settings } from 'lucide-react';
+import { useState } from 'react';
 
 const NAV_ITEMS = [
   { href: '/upload', label: 'Upload', icon: Upload },
@@ -16,25 +16,6 @@ export default function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const [collapsed, setCollapsed] = useState(false);
-  const [passkeyEnrolled, setPasskeyEnrolled] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        const res = await fetch('/api/auth/passkey/status');
-        if (res.ok) {
-          const data = await res.json();
-          setPasskeyEnrolled(data.enrolled);
-        }
-      } catch {
-        // Ignore errors
-      }
-    };
-    if (session?.user) {
-      checkStatus();
-    }
-  }, [session]);
-
   const isPublicPage = pathname === '/' || pathname === '/login';
   if (isPublicPage) return null;
 
@@ -100,33 +81,6 @@ export default function Sidebar() {
 
         {/* Bottom section */}
         <div className="px-2 py-3 border-t space-y-2" style={{ borderColor: 'var(--border)' }}>
-          {/* Passkey status */}
-          <Link
-            href="/settings"
-            className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-all"
-            style={{ background: 'var(--bg-elevated)' }}
-          >
-            <Fingerprint
-              size={14}
-              style={{
-                color: passkeyEnrolled === true
-                  ? 'var(--success)'
-                  : passkeyEnrolled === false
-                  ? 'var(--text-muted)'
-                  : 'var(--text-secondary)',
-              }}
-            />
-            {!collapsed && (
-              <span style={{ color: 'var(--text-secondary)' }}>
-                {passkeyEnrolled === true
-                  ? 'Passkey enrolled'
-                  : passkeyEnrolled === false
-                  ? 'No passkey'
-                  : 'Checking...'}
-              </span>
-            )}
-          </Link>
-
           {/* User info */}
           {session?.user && (
             <div className="flex items-center gap-3 px-3 py-2">

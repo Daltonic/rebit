@@ -1,49 +1,43 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { startRegistration } from '@simplewebauthn/browser';
 import { Fingerprint, Shield, AlertCircle, Loader2, CheckCircle2, Smartphone, Trash2 } from 'lucide-react';
 
 export default function SettingsPage() {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const router = useRouter();
   const [passkeyAvailable, setPasskeyAvailable] = useState<boolean | null>(null);
   const [enrolling, setEnrolling] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [enrolled, setEnrolled] = useState(false);
-  const [checkingStatus, setCheckingStatus] = useState(true);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const statusFetched = useRef(false);
 
   useEffect(() => {
-    // Check if WebAuthn is available in this browser
     const available = typeof window !== 'undefined' &&
       window.PublicKeyCredential !== undefined;
     setPasskeyAvailable(available);
   }, []);
 
-  // Check existing enrollment status on load
+  // Check enrollment status once on mount
   useEffect(() => {
-    if (!session?.user) return;
-
+    if (statusFetched.current) return;
+    statusFetched.current = true;
     fetch('/api/auth/passkey/status')
       .then((res) => res.json())
-      .then((data) => {
-        setEnrolled(Boolean(data.enrolled));
-      })
-      .catch(() => {
-        // If the status check fails, just leave enrolled as false
-      })
-      .finally(() => setCheckingStatus(false));
-  }, [session]);
+      .then((data) => setEnrolled(Boolean(data.enrolled)))
+      .catch(() => {});
+  }, []);
 
-  // Redirect if not logged in
+  // Redirect if not logged in — wait for session to resolve first
   useEffect(() => {
-    if (!session?.user) {
+    if (status === 'unauthenticated') {
       router.push('/login');
     }
-  }, [session, router]);
+  }, [status, router]);
 
   async function handleEnroll() {
     if (!passkeyAvailable) {
@@ -55,7 +49,6 @@ export default function SettingsPage() {
     setMessage(null);
 
     try {
-      // Step 1: Get registration options from server
       const beginRes = await fetch('/api/auth/passkey/register/begin');
       if (!beginRes.ok) {
         const data = await beginRes.json();
@@ -63,11 +56,8 @@ export default function SettingsPage() {
       }
 
       const options = await beginRes.json();
-
-      // Step 2: Trigger the native biometric dialogue (fingerprint / Face ID / Windows Hello)
       const regResponse = await startRegistration(options);
 
-      // Step 3: Send the response back to the server for verification
       const completeRes = await fetch('/api/auth/passkey/register/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -82,7 +72,6 @@ export default function SettingsPage() {
       setEnrolled(true);
       setMessage({ type: 'success', text: 'Passkey enrolled successfully! You can now sign in with your fingerprint.' });
     } catch (err: any) {
-      // If user cancelled the dialogue, show a friendly message
       if (err.name === 'AbortError' || err.name === 'NotAllowedError') {
         setMessage({ type: 'error', text: 'Passkey registration was cancelled.' });
       } else {
@@ -197,14 +186,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Enroll / Remove button */}
-        {checkingStatus ? (
-          <div
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold"
-            style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}
-          >
-            <Loader2 size={14} className="animate-spin" /> Checking enrollment…
-          </div>
-        ) : enrolled ? (
+        {enrolled ? (
           <button
             onClick={handleRemove}
             disabled={removing}
