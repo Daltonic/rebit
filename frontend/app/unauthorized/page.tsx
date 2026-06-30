@@ -21,7 +21,7 @@ export default function UnauthorizedPage() {
           Access Denied
         </h1>
 
-        <p className="text-sm mb-8" style={{ color: 'var(--text-secondary)' }}>
+        <p className="text-sm mb-8 px-2" style={{ color: 'var(--text-secondary)' }}>
           You don't have the required permissions to access this page.
           If you believe this is a mistake, contact your administrator.
         </p>
@@ -29,7 +29,7 @@ export default function UnauthorizedPage() {
         <div className="flex flex-col gap-3">
           <Link
             href="/projects"
-            className="w-full py-2.5 rounded-lg font-medium text-sm transition-all"
+            className="w-full py-3 sm:py-2.5 rounded-lg font-medium text-sm transition-all"
             style={{
               background: 'var(--accent)',
               color: 'white',
@@ -39,7 +39,7 @@ export default function UnauthorizedPage() {
           </Link>
           <Link
             href="/login"
-            className="w-full py-2.5 rounded-lg font-medium text-sm transition-all"
+            className="w-full py-3 sm:py-2.5 rounded-lg font-medium text-sm transition-all"
             style={{
               background: 'var(--bg-elevated)',
               color: 'var(--text-primary)',

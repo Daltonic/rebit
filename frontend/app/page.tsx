@@ -5,31 +5,32 @@ export default function HomePage() {
   return (
     <div className="min-h-screen">
       {/* Hero Section */}
-      <section className="max-w-4xl mx-auto px-4 pt-24 pb-16 text-center">
+      <section className="max-w-4xl mx-auto px-4 pt-16 sm:pt-24 pb-16 text-center">
         <div className="flex items-center justify-center gap-3 mb-6">
           <div
-            className="w-12 h-12 rounded-xl flex items-center justify-center"
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center"
             style={{
               background: 'var(--accent)',
               boxShadow: '0 0 30px var(--accent-glow)',
             }}
           >
-            <Zap size={24} color="white" fill="white" />
+            <Zap size={22} color="white" fill="white" />
           </div>
           <span
             style={{
               fontFamily: 'var(--mono)',
               fontWeight: 700,
-              fontSize: '2rem',
+              fontSize: '1.75rem',
               color: 'var(--text-primary)',
             }}
+            className="sm:text-[2rem]"
           >
             re<span style={{ color: 'var(--accent-bright)' }}>bit</span>
           </span>
         </div>
 
         <h1
-          className="text-4xl md:text-5xl font-bold mb-4 leading-tight"
+          className="text-3xl sm:text-4xl md:text-5xl font-bold mb-4 leading-tight"
           style={{ color: 'var(--text-primary)' }}
         >
           Decentralized Video
@@ -38,17 +39,17 @@ export default function HomePage() {
         </h1>
 
         <p
-          className="text-lg mb-8 max-w-2xl mx-auto"
+          className="text-base sm:text-lg mb-8 max-w-2xl mx-auto px-2"
           style={{ color: 'var(--text-secondary)' }}
         >
           Turn long-form video into short-form vertical clips. Fully self-hosted,
           stored on Sia decentralized storage.
         </p>
 
-        <div className="flex items-center justify-center gap-4">
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 px-4">
           <Link
             href="/login"
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-lg font-medium text-sm transition-all"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium text-sm transition-all"
             style={{
               background: 'var(--accent)',
               color: 'white',
@@ -60,7 +61,7 @@ export default function HomePage() {
           </Link>
           <Link
             href="/login"
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-lg font-medium text-sm transition-all"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium text-sm transition-all"
             style={{
               background: 'var(--bg-elevated)',
               color: 'var(--text-primary)',
@@ -73,8 +74,8 @@ export default function HomePage() {
       </section>
 
       {/* Features */}
-      <section className="max-w-4xl mx-auto px-4 py-16">
-        <div className="grid md:grid-cols-3 gap-6">
+      <section className="max-w-4xl mx-auto px-4 py-12 sm:py-16">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6">
           <FeatureCard
             icon={<Video size={20} />}
             title="AI-Powered Clipping"
@@ -94,7 +95,7 @@ export default function HomePage() {
       </section>
 
       {/* Footer */}
-      <footer className="text-center py-8">
+      <footer className="text-center py-8 px-4">
         <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
           ReBit &mdash; Decentralized Video Clipping Engine
         </p>
@@ -114,7 +115,7 @@ function FeatureCard({
 }) {
   return (
     <div
-      className="p-6 rounded-xl border transition-all"
+      className="p-5 sm:p-6 rounded-xl border transition-all"
       style={{
         background: 'var(--bg-card)',
         borderColor: 'var(--border)',

@@ -107,27 +107,27 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
+    <div className="max-w-2xl mx-auto px-4 py-6 sm:py-8">
       <h1 className="text-xl font-semibold mb-1" style={{ color: 'var(--text-primary)', letterSpacing: '-0.025em' }}>
         Settings
       </h1>
-      <p className="text-sm mb-8" style={{ color: 'var(--text-muted)' }}>
+      <p className="text-sm mb-6 sm:mb-8" style={{ color: 'var(--text-muted)' }}>
         Manage your account and device settings.
       </p>
 
       {/* Passkey Enrollment Card */}
       <div
-        className="rounded-2xl p-6"
+        className="rounded-2xl p-4 sm:p-6"
         style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}
       >
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-start sm:items-center gap-3 mb-6">
           <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center"
+            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
             style={{ background: 'rgba(124,58,237,0.1)', color: 'var(--accent-bright)' }}
           >
             <Fingerprint size={20} />
           </div>
-          <div>
+          <div className="min-w-0">
             <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
               Passkey (Biometric Authentication)
             </h2>
@@ -142,12 +142,12 @@ export default function SettingsPage() {
           className="flex items-center gap-3 px-4 py-3 rounded-lg mb-4 text-sm"
           style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
         >
-          <Smartphone size={16} style={{ color: 'var(--text-secondary)' }} />
-          <div>
-            <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+          <Smartphone size={16} className="flex-shrink-0" style={{ color: 'var(--text-secondary)' }} />
+          <div className="min-w-0">
+            <p className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
               {typeof navigator !== 'undefined' ? navigator.platform || 'Unknown device' : 'Unknown device'}
             </p>
-            <p className="text-xs" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)', fontSize: '0.65rem' }}>
+            <p className="text-xs truncate" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)', fontSize: '0.65rem' }}>
               {session?.user?.email || ''}
             </p>
           </div>
@@ -168,9 +168,9 @@ export default function SettingsPage() {
           }}
         >
           {passkeyAvailable ? (
-            <Shield size={16} style={{ color: 'var(--success)' }} />
+            <Shield size={16} className="flex-shrink-0" style={{ color: 'var(--success)' }} />
           ) : (
-            <AlertCircle size={16} style={{ color: 'var(--danger)' }} />
+            <AlertCircle size={16} className="flex-shrink-0" style={{ color: 'var(--danger)' }} />
           )}
           <span
             className="text-xs"
@@ -182,7 +182,7 @@ export default function SettingsPage() {
               ? 'Passkey ready — uses your device biometrics'
               : 'Passkey not supported on this browser'}
           </span>
-          {enrolled && <CheckCircle2 size={14} style={{ color: 'var(--success)', marginLeft: 'auto' }} />}
+          {enrolled && <CheckCircle2 size={14} className="flex-shrink-0" style={{ color: 'var(--success)', marginLeft: 'auto' }} />}
         </div>
 
         {/* Enroll / Remove button */}
@@ -190,7 +190,7 @@ export default function SettingsPage() {
           <button
             onClick={handleRemove}
             disabled={removing}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 py-3 sm:py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
             style={{
               background: 'rgba(239,68,68,0.1)',
               color: 'var(--danger)',
@@ -207,7 +207,7 @@ export default function SettingsPage() {
           <button
             onClick={handleEnroll}
             disabled={enrolling || !passkeyAvailable}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 py-3 sm:py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
             style={{
               background: passkeyAvailable ? 'var(--accent)' : 'var(--bg-elevated)',
               color: passkeyAvailable ? 'white' : 'var(--text-muted)',
@@ -225,7 +225,7 @@ export default function SettingsPage() {
         {/* Message */}
         {message && (
           <div
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm mt-4"
+            className="flex items-start gap-2 px-4 py-2.5 rounded-lg text-sm mt-4"
             style={{
               background: message.type === 'success'
                 ? 'rgba(16,185,129,0.1)'
@@ -237,7 +237,7 @@ export default function SettingsPage() {
               color: message.type === 'success' ? 'var(--success)' : 'var(--danger)',
             }}
           >
-            {message.type === 'success' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+            {message.type === 'success' ? <CheckCircle2 size={14} className="flex-shrink-0 mt-0.5" /> : <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />}
             {message.text}
           </div>
         )}

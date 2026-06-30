@@ -2,35 +2,51 @@
 
 import { usePathname } from 'next/navigation';
 import { useSession, signOut } from 'next-auth/react';
-import { LogOut } from 'lucide-react';
+import Image from 'next/image';
+import { LogOut, Menu } from 'lucide-react';
+import { useSidebar } from './SidebarContext';
 
 export default function TopNav() {
   const pathname = usePathname();
   const { data: session } = useSession();
+  const { collapsed, setMobileOpen } = useSidebar();
   const isPublicPage = pathname === '/' || pathname === '/login';
   if (isPublicPage) return null;
 
   return (
     <header
-      className="fixed top-0 right-0 z-40 flex items-center justify-end gap-3 px-6 h-14 border-b"
+      className={`fixed top-0 right-0 left-0 z-30 flex items-center justify-between md:justify-end gap-3 px-4 md:px-6 h-14 border-b transition-[left] duration-200 ${collapsed ? 'md:left-15' : 'md:left-55'
+        }`}
       style={{
-        left: '220px',
         background: 'rgba(10,10,15,0.95)',
         backdropFilter: 'blur(12px)',
         borderColor: 'var(--border)',
       }}
     >
+      {/* Hamburger — mobile/tablet only */}
+      <button
+        onClick={() => setMobileOpen(true)}
+        className="md:hidden p-2 rounded-lg"
+        style={{ color: 'var(--text-secondary)' }}
+        aria-label="Open menu"
+      >
+        <Menu size={20} />
+      </button>
+
       {session?.user && (
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 md:gap-3">
           {session.user.image ? (
-            <img
+            <Image
               src={session.user.image}
               alt={session.user.name || 'User'}
+              width={28}
+              height={28}
               className="w-7 h-7 rounded-full object-cover"
+              unoptimized
             />
           ) : (
             <div
-              className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold"
+              className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
               style={{ background: 'var(--accent)', color: 'white' }}
             >
               {session.user.name?.[0]?.toUpperCase() || 'U'}
@@ -45,6 +61,7 @@ export default function TopNav() {
             style={{ color: 'var(--text-muted)' }}
             onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; }}
+            aria-label="Sign out"
           >
             <LogOut size={14} />
             <span className="hidden sm:inline">Sign out</span>

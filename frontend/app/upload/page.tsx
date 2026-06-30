@@ -58,14 +58,14 @@ export default function UploadPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4 py-12">
+    <div className="min-h-screen flex flex-col items-center justify-center px-4 py-10 sm:py-12">
       <div className="w-full max-w-xl">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-semibold mb-2" style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
+          <h1 className="text-xl sm:text-2xl font-semibold mb-2" style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
             Upload a video
           </h1>
-          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+          <p className="text-sm px-2" style={{ color: 'var(--text-secondary)' }}>
             MP4, MOV, WebM, or MKV · Up to 5 GB · 2 hours max
           </p>
         </div>
@@ -80,7 +80,7 @@ export default function UploadPage() {
           style={{
             border: `2px dashed ${dragging ? 'var(--accent-bright)' : file ? 'var(--success)' : 'var(--border)'}`,
             background: dragging ? 'var(--accent-glow)' : 'var(--bg-card)',
-            padding: file ? '24px' : '56px 24px',
+            padding: file ? '20px' : '40px 20px',
           }}>
 
           {!file ? (
@@ -94,7 +94,7 @@ export default function UploadPage() {
                   Drop your video here
                 </p>
                 <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  or click to browse
+                  or tap to browse
                 </p>
               </div>
             </div>
@@ -146,18 +146,11 @@ export default function UploadPage() {
         )}
 
         {/* Actions */}
-        <div className="mt-6 flex gap-3">
-          {file && !uploading && (
-            <button onClick={() => { setFile(null); setError(null); }}
-              className="flex-shrink-0 px-4 py-2.5 rounded-lg text-sm transition-colors"
-              style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-              Clear
-            </button>
-          )}
+        <div className="mt-6 flex flex-col sm:flex-row gap-3">
           <button
             onClick={file && !uploading ? simulateUpload : () => inputRef.current?.click()}
             disabled={uploading}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all"
+            className="order-2 sm:order-1 flex-1 flex items-center justify-center gap-2 py-3 sm:py-2.5 rounded-lg text-sm font-semibold transition-all"
             style={{
               background: file ? 'var(--accent)' : 'var(--bg-elevated)',
               color: file ? 'white' : 'var(--text-muted)',
@@ -172,10 +165,17 @@ export default function UploadPage() {
               : <><File size={14} /> Choose a file</>
             }
           </button>
+          {file && !uploading && (
+            <button onClick={() => { setFile(null); setError(null); }}
+              className="order-1 sm:order-2 flex-shrink-0 px-4 py-3 sm:py-2.5 rounded-lg text-sm transition-colors"
+              style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+              Clear
+            </button>
+          )}
         </div>
 
         {/* Format hints */}
-        <div className="mt-6 grid grid-cols-2 gap-3">
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
             { label: 'Transcription', desc: 'Whisper v3 — runs locally' },
             { label: 'Highlight AI', desc: 'Ollama — no API key needed' },

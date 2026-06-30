@@ -1,13 +1,22 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import Sidebar from '@/components/Sidebar';
 import TopNav from '@/components/TopNav';
 import SessionProvider from '@/components/SessionProvider';
+import { SidebarProvider } from '@/components/SidebarContext';
+import MainContent from '@/components/MainContent';
 import { auth } from '@/lib/auth/auth';
 
 export const metadata: Metadata = {
   title: 'ReBit — Decentralized Video Clipping Engine',
   description: 'Turn long-form video into short-form vertical clips. Fully self-hosted, stored on Sia.',
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  viewportFit: 'cover',
 };
 
 export const dynamic = 'force-dynamic';
@@ -25,9 +34,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       </head>
       <body>
         <SessionProvider session={session}>
-          <Sidebar />
-          <TopNav />
-          <main className="pt-14">{children}</main>
+          <SidebarProvider>
+            <Sidebar />
+            <TopNav />
+            <MainContent>{children}</MainContent>
+          </SidebarProvider>
         </SessionProvider>
       </body>
     </html>

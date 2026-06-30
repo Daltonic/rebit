@@ -39,7 +39,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   const isComplete = job.status === 'complete';
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-8">
+    <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
       {/* Back */}
       <Link href="/projects" className="inline-flex items-center gap-1.5 text-sm mb-6 transition-colors"
         style={{ color: 'var(--text-muted)' }}>
@@ -48,7 +48,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
 
       <div className="grid gap-5 md:grid-cols-[1fr_260px]">
         {/* Pipeline */}
-        <div className="space-y-5">
+        <div className="space-y-5 order-2 md:order-1">
           <div>
             <h1 className="text-lg font-semibold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.025em' }}>
               {STATUS_LABEL[job.status]}
@@ -60,21 +60,21 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
 
           {isComplete && (
             <Link href={`/projects/${job.id}/clips`}
-              className="flex items-center justify-between px-5 py-4 rounded-xl transition-all hover:scale-[1.01]"
+              className="flex items-center justify-between gap-3 px-5 py-4 rounded-xl transition-all hover:scale-[1.01]"
               style={{ background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.3)' }}>
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Review clips</p>
                 <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
                   {job._count?.segments ?? 0} clips ready to approve or reject
                 </p>
               </div>
-              <ArrowRight size={16} style={{ color: 'var(--accent-bright)' }} />
+              <ArrowRight size={16} className="flex-shrink-0" style={{ color: 'var(--accent-bright)' }} />
             </Link>
           )}
         </div>
 
         {/* Sidebar */}
-        <div className="space-y-3">
+        <div className="space-y-3 order-1 md:order-2">
           <div className="rounded-xl p-4 space-y-3" style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
             <h2 className="text-xs uppercase" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)', letterSpacing: '0.08em', fontSize: '10px' }}>
               Source Video

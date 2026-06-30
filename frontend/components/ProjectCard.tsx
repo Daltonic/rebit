@@ -57,19 +57,19 @@ export default function ProjectCard({ job }: { job: Job }) {
     : `/projects/${job.id}`;
 
   return (
-    <Link href={href} className="block group rounded-xl p-5 transition-all duration-200 hover:scale-[1.01]"
+    <Link href={href} className="block group rounded-xl p-4 sm:p-5 transition-all duration-200 active:scale-[0.99] sm:hover:scale-[1.01]"
       style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
-      <div className="flex items-start gap-4">
+      <div className="flex items-start gap-3 sm:gap-4">
         {/* Icon */}
-        <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
+        <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center shrink-0"
           style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
           <Video size={16} style={{ color: 'var(--text-muted)' }} />
         </div>
 
         {/* Main */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2">
-            <h3 className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+          <div className="flex items-start justify-between gap-2 flex-wrap">
+            <h3 className="text-sm font-medium truncate max-w-full" style={{ color: 'var(--text-primary)' }}>
               {job.sourceFilename}
             </h3>
             <div className="flex items-center gap-1.5 shrink-0 px-2 py-0.5 rounded"
@@ -79,7 +79,7 @@ export default function ProjectCard({ job }: { job: Job }) {
             </div>
           </div>
 
-          <div className="mt-1.5 flex items-center gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+          <div className="mt-1.5 flex items-center gap-3 text-xs flex-wrap" style={{ color: 'var(--text-muted)' }}>
             <span style={{ fontFamily: 'var(--mono)' }}>{formatDuration(job.durationSeconds)}</span>
             {job._count?.segments !== undefined && (
               <span>{job._count.segments} clip{job._count.segments !== 1 ? 's' : ''}</span>
@@ -108,11 +108,11 @@ export default function ProjectCard({ job }: { job: Job }) {
 
         {/* Arrow */}
         <ArrowRight size={14} style={{ color: 'var(--text-muted)', flexShrink: 0, marginTop: 2 }}
-          className="transition-transform group-hover:translate-x-1" />
+          className="hidden sm:block transition-transform group-hover:translate-x-1" />
       </div>
 
       {job.status === 'failed' && (
-        <div className="mt-3 flex items-center gap-1.5 text-xs cursor-pointer hover:opacity-80"
+        <div className="mt-3 flex items-center gap-1.5 text-xs cursor-pointer hover:opacity-80 py-1"
           style={{ color: 'var(--danger)' }}
           onClick={e => { e.preventDefault(); alert('Retry not yet wired to API'); }}>
           <RotateCcw size={11} /> Retry job

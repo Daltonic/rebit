@@ -38,7 +38,7 @@ export default function PipelineTracker({ steps }: { steps: PipelineStep[] }) {
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
-      <div className="px-5 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
+      <div className="px-4 sm:px-5 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
         <h2 className="text-sm font-semibold" style={{ fontFamily: 'var(--mono)', color: 'var(--text-secondary)', letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: '11px' }}>
           Pipeline Progress
         </h2>
@@ -51,7 +51,7 @@ export default function PipelineTracker({ steps }: { steps: PipelineStep[] }) {
           const color = statusColor(status);
 
           return (
-            <div key={key} className="px-5 py-4 flex items-start gap-4">
+            <div key={key} className="px-4 sm:px-5 py-3.5 sm:py-4 flex items-start gap-3 sm:gap-4">
               {/* Connector line + dot */}
               <div className="flex flex-col items-center mt-0.5 flex-shrink-0" style={{ width: 24 }}>
                 <div className="w-6 h-6 rounded-full flex items-center justify-center border"
@@ -72,7 +72,7 @@ export default function PipelineTracker({ steps }: { steps: PipelineStep[] }) {
                   <span className="text-sm font-medium" style={{ color: status === 'pending' ? 'var(--text-muted)' : 'var(--text-primary)' }}>
                     {label}
                   </span>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     {step && (
                       <span className="text-xs" style={{ fontFamily: 'var(--mono)', color: 'var(--text-muted)' }}>
                         {elapsed(step.startedAt, step.completedAt)}

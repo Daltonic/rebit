@@ -197,29 +197,32 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
         {/* Progress bar */}
         <div
           className="w-full mb-2 cursor-pointer"
-          style={{ height: 3, background: 'rgba(255,255,255,0.2)', borderRadius: 2, position: 'relative' }}
+          style={{ height: 14, display: 'flex', alignItems: 'center', position: 'relative' }}
           onClick={seek}
           onMouseMove={e => { if (e.buttons === 1) seek(e); }}
+          onTouchStart={e => { const t = e.touches[0]; if (t) seek({ clientX: t.clientX, currentTarget: e.currentTarget, stopPropagation: () => e.stopPropagation() } as any); }}
         >
-          <div style={{
-            position: 'absolute', left: 0, top: 0, bottom: 0,
-            width: `${progress}%`,
-            background: 'var(--accent-bright, #7c3aed)',
-            borderRadius: 2,
-            transition: 'width 0.1s linear',
-          }} />
-          <div style={{
-            position: 'absolute', top: '50%', left: `${progress}%`,
-            transform: 'translate(-50%, -50%)',
-            width: 10, height: 10, borderRadius: '50%',
-            background: 'white',
-            boxShadow: '0 0 4px rgba(0,0,0,0.4)',
-          }} />
+          <div style={{ width: '100%', height: 3, background: 'rgba(255,255,255,0.2)', borderRadius: 2, position: 'relative' }}>
+            <div style={{
+              position: 'absolute', left: 0, top: 0, bottom: 0,
+              width: `${progress}%`,
+              background: 'var(--accent-bright, #7c3aed)',
+              borderRadius: 2,
+              transition: 'width 0.1s linear',
+            }} />
+            <div style={{
+              position: 'absolute', top: '50%', left: `${progress}%`,
+              transform: 'translate(-50%, -50%)',
+              width: 10, height: 10, borderRadius: '50%',
+              background: 'white',
+              boxShadow: '0 0 4px rgba(0,0,0,0.4)',
+            }} />
+          </div>
         </div>
 
         {/* Controls row */}
-        <div className="flex items-center gap-2">
-          <button onClick={toggle} style={{ display: 'flex', alignItems: 'center', padding: '0 2px' }}>
+        <div className="flex items-center gap-1">
+          <button onClick={toggle} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 6, minWidth: 28, minHeight: 28 }}>
             {playing
               ? <Pause size={13} fill="white" style={{ color: 'white' }} />
               : <Play size={13} fill="white" style={{ color: 'white' }} />
@@ -232,14 +235,14 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
 
           <div style={{ flex: 1 }} />
 
-          <button onClick={toggleMute} style={{ display: 'flex', alignItems: 'center', padding: '0 2px' }}>
+          <button onClick={toggleMute} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 6, minWidth: 28, minHeight: 28 }}>
             {muted
               ? <VolumeX size={13} style={{ color: 'rgba(255,255,255,0.7)' }} />
               : <Volume2 size={13} style={{ color: 'rgba(255,255,255,0.7)' }} />
             }
           </button>
 
-          <button onClick={fullscreen} style={{ display: 'flex', alignItems: 'center', padding: '0 2px' }}>
+          <button onClick={fullscreen} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 6, minWidth: 28, minHeight: 28 }}>
             <Maximize2 size={12} style={{ color: 'rgba(255,255,255,0.7)' }} />
           </button>
         </div>
@@ -395,7 +398,7 @@ export default function ClipCard({ segment, sourceUrl, onApprove, onReject }: Cl
           {status === 'approved' ? (
             <button
               onClick={e => e.stopPropagation()}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded text-xs font-medium transition-colors"
+              className="flex-1 flex items-center justify-center gap-1.5 py-2.5 sm:py-2 rounded text-xs font-medium transition-colors"
               style={{ background: 'rgba(16,185,129,0.1)', color: 'var(--success)', border: '1px solid rgba(16,185,129,0.2)', cursor: 'pointer' }}
             >
               <Download size={12} /> Export MP4
@@ -403,7 +406,7 @@ export default function ClipCard({ segment, sourceUrl, onApprove, onReject }: Cl
           ) : status === 'rejected' ? (
             <button
               onClick={handleApprove}
-              className="flex-1 py-2 rounded text-xs font-medium transition-colors"
+              className="flex-1 py-2.5 sm:py-2 rounded text-xs font-medium transition-colors"
               style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)', cursor: 'pointer' }}
             >
               Restore
@@ -412,14 +415,14 @@ export default function ClipCard({ segment, sourceUrl, onApprove, onReject }: Cl
             <>
               <button
                 onClick={handleApprove}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded text-xs font-medium transition-all hover:opacity-90"
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 sm:py-2 rounded text-xs font-medium transition-all active:opacity-80 sm:hover:opacity-90"
                 style={{ background: 'rgba(16,185,129,0.12)', color: 'var(--success)', border: '1px solid rgba(16,185,129,0.25)', cursor: 'pointer' }}
               >
                 <Check size={12} /> Approve
               </button>
               <button
                 onClick={handleReject}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded text-xs font-medium transition-all hover:opacity-90"
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 sm:py-2 rounded text-xs font-medium transition-all active:opacity-80 sm:hover:opacity-90"
                 style={{ background: 'rgba(239,68,68,0.08)', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.2)', cursor: 'pointer' }}
               >
                 <X size={12} /> Reject
