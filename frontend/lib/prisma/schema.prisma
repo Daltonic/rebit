@@ -30,18 +30,62 @@ enum SegmentStatus {
   rejected
 }
 
+enum SiaStatus {
+  pending
+  queued
+  uploading
+  pinning
+  ready
+  failed
+}
+
+model AppSettings {
+  id                 String   @id @default("default")
+  setupComplete      Boolean  @default(false)
+
+  // Sia configuration (set via setup wizard)
+  siaConnected       Boolean  @default(false)
+  siaIndexerUrl      String?
+  siaAppId           String?
+  siaAppName         String?
+  siaAppDescription  String?
+
+  // OpenRouter API key
+  openrouterKey      String?
+
+  // Social login provider keys
+  googleClientId     String?
+  googleClientSecret String?
+  githubClientId     String?
+  githubClientSecret String?
+
+  // WebAuthn / Passkey config
+  webauthnRpId       String?
+  webauthnOrigin     String?
+
+  // Pipeline retry config
+  difficultyMaxRetries Int    @default(3)
+  updatedAt          DateTime @updatedAt
+
+  @@map("app_settings")
+}
+
 model Job {
   id                String        @id @default(cuid())
   status            JobStatus     @default(uploading)
   sourceFilename    String        @map("source_filename")
   sourceSiaObjectId String?       @map("source_sia_object_id")
   durationSeconds   Int?          @map("duration_seconds")
+  siaHash           String?       @map("sia_hash")
+  indexdKey         String?       @map("indexd_key")
+  siaStatus         SiaStatus     @default(pending) @map("sia_status")
   createdAt         DateTime      @default(now()) @map("created_at")
   updatedAt         DateTime      @updatedAt @map("updated_at")
 
   transcript        Transcript?
   segments          Segment[]
   pipelineSteps     PipelineStep[]
+  siaLogs           SiaLog[]
 
   @@map("jobs")
 }
@@ -88,6 +132,18 @@ model PipelineStep {
   completedAt DateTime?   @map("completed_at")
 
   @@map("pipeline_steps")
+}
+
+model SiaLog {
+  id      String   @id @default(cuid())
+  jobId   String   @map("job_id")
+  job     Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  step    String
+  passed  Boolean?
+  message String   @default("")
+  ts      DateTime @default(now())
+
+  @@map("sia_logs")
 }
 
 model User {

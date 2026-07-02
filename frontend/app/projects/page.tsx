@@ -36,7 +36,7 @@ export default function ProjectsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <SiaStatus connected={false} demoMode={true} />
+          <SiaStatus />
           <Link href="/upload"
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-all"
             style={{ background: 'var(--accent)', color: 'white', boxShadow: '0 0 16px var(--accent-glow)' }}>

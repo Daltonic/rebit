@@ -4,6 +4,7 @@ export const mockSiaStatus: SiaStatus = {
   connected: false,
   demoMode: true,
   indexerUrl: null,
+  reason: 'Demo mode — Sia not configured',
 };
 
 // All URLs below are from archive.org — publicly accessible, CORS-open, no auth required
@@ -20,6 +21,9 @@ export const mockJobs: Job[] = [
     sourceFilename: 'founder-interview-ep42.mp4',
     sourceUrl: VIDEOS.bunny,
     sourceSiaObjectId: 'sia_abc123def456',
+    siaHash: 'sia_abc123def456',
+    indexdKey: 'idx_key_001',
+    siaStatus: 'ready',
     durationSeconds: 3540,
     createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
     updatedAt: new Date(Date.now() - 3600000 * 1).toISOString(),
@@ -76,6 +80,9 @@ export const mockJobs: Job[] = [
     sourceFilename: 'product-demo-q3-2026.mov',
     sourceUrl: VIDEOS.elephant,
     sourceSiaObjectId: null,
+    siaHash: null,
+    indexdKey: null,
+    siaStatus: 'pending',
     durationSeconds: 2280,
     createdAt: new Date(Date.now() - 1800000).toISOString(),
     updatedAt: new Date(Date.now() - 300000).toISOString(),
@@ -95,6 +102,9 @@ export const mockJobs: Job[] = [
     sourceFilename: 'internal-all-hands-june.webm',
     sourceUrl: VIDEOS.tears,
     sourceSiaObjectId: null,
+    siaHash: null,
+    indexdKey: null,
+    siaStatus: 'pending',
     durationSeconds: 5400,
     createdAt: new Date(Date.now() - 86400000).toISOString(),
     updatedAt: new Date(Date.now() - 82800000).toISOString(),

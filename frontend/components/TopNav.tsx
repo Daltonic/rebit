@@ -5,6 +5,7 @@ import { useSession, signOut } from 'next-auth/react';
 import Image from 'next/image';
 import { LogOut, Menu } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
+import SiaStatus from './SiaStatus';
 
 export default function TopNav() {
   const pathname = usePathname();
@@ -33,41 +34,47 @@ export default function TopNav() {
         <Menu size={20} />
       </button>
 
-      {session?.user && (
-        <div className="flex items-center gap-2 md:gap-3">
-          {session.user.image ? (
-            <Image
-              src={session.user.image}
-              alt={session.user.name || 'User'}
-              width={28}
-              height={28}
-              className="w-7 h-7 rounded-full object-cover"
-              unoptimized
-            />
-          ) : (
-            <div
-              className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
-              style={{ background: 'var(--accent)', color: 'white' }}
+      <div className="flex-1" />
+
+      <div className="flex items-center gap-3">
+        <SiaStatus />
+
+        {session?.user && (
+          <div className="flex items-center gap-2 md:gap-3">
+            {session.user.image ? (
+              <Image
+                src={session.user.image}
+                alt={session.user.name || 'User'}
+                width={28}
+                height={28}
+                className="w-7 h-7 rounded-full object-cover"
+                unoptimized
+              />
+            ) : (
+              <div
+                className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
+                style={{ background: 'var(--accent)', color: 'white' }}
+              >
+                {session.user.name?.[0]?.toUpperCase() || 'U'}
+              </div>
+            )}
+            <span className="text-sm font-medium hidden sm:inline" style={{ color: 'var(--text-primary)' }}>
+              {session.user.name || 'User'}
+            </span>
+            <button
+              onClick={() => signOut({ callbackUrl: '/login' })}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all cursor-pointer"
+              style={{ color: 'var(--text-muted)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; }}
+              aria-label="Sign out"
             >
-              {session.user.name?.[0]?.toUpperCase() || 'U'}
-            </div>
-          )}
-          <span className="text-sm font-medium hidden sm:inline" style={{ color: 'var(--text-primary)' }}>
-            {session.user.name || 'User'}
-          </span>
-          <button
-            onClick={() => signOut({ callbackUrl: '/login' })}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all cursor-pointer"
-            style={{ color: 'var(--text-muted)' }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; }}
-            aria-label="Sign out"
-          >
-            <LogOut size={14} />
-            <span className="hidden sm:inline">Sign out</span>
-          </button>
-        </div>
-      )}
+              <LogOut size={14} />
+              <span className="hidden sm:inline">Sign out</span>
+            </button>
+          </div>
+        )}
+      </div>
     </header>
   );
 }
