@@ -30,21 +30,22 @@ class AppSettings(Base):
     __tablename__ = "app_settings"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default="default")
-    setup_complete: Mapped[bool] = mapped_column(Boolean, default=False)
-    sia_connected: Mapped[bool] = mapped_column(Boolean, default=False)
-    sia_indexer_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    sia_app_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    sia_app_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    sia_app_description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    openrouter_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    google_client_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    google_client_secret: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    github_client_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    github_client_secret: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    webauthn_rp_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    webauthn_origin: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    difficulty_max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    setup_complete: Mapped[bool] = mapped_column("setupComplete", Boolean, default=False)
+    sia_connected: Mapped[bool] = mapped_column("siaConnected", Boolean, default=False)
+    sia_indexer_url: Mapped[Optional[str]] = mapped_column("siaIndexerUrl", String, nullable=True)
+    sia_app_id: Mapped[Optional[str]] = mapped_column("siaAppId", String, nullable=True)
+    sia_app_name: Mapped[Optional[str]] = mapped_column("siaAppName", String, nullable=True)
+    sia_app_description: Mapped[Optional[str]] = mapped_column("siaAppDescription", String, nullable=True)
+    openrouter_key: Mapped[Optional[str]] = mapped_column("openrouterKey", String, nullable=True)
+    google_client_id: Mapped[Optional[str]] = mapped_column("googleClientId", String, nullable=True)
+    google_client_secret: Mapped[Optional[str]] = mapped_column("googleClientSecret", String, nullable=True)
+    github_client_id: Mapped[Optional[str]] = mapped_column("githubClientId", String, nullable=True)
+    github_client_secret: Mapped[Optional[str]] = mapped_column("githubClientSecret", String, nullable=True)
+    webauthn_rp_id: Mapped[Optional[str]] = mapped_column("webauthnRpId", String, nullable=True)
+    webauthn_origin: Mapped[Optional[str]] = mapped_column("webauthnOrigin", String, nullable=True)
+    difficulty_max_retries: Mapped[int] = mapped_column("difficultyMaxRetries", Integer, default=3)
     updated_at: Mapped[datetime] = mapped_column(
+        "updatedAt",
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),

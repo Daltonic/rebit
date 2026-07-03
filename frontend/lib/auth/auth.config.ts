@@ -12,7 +12,9 @@ export const authConfig: NextAuthConfig = {
       const isOnPublicPage =
         nextUrl.pathname === '/' ||
         nextUrl.pathname === '/login' ||
+        nextUrl.pathname === '/setup' ||
         nextUrl.pathname.startsWith('/api/auth') ||
+        nextUrl.pathname.startsWith('/api/setup') ||
         nextUrl.pathname === '/unauthorized';
 
       if (isOnPublicPage) {

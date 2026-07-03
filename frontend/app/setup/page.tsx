@@ -1,20 +1,32 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useReducer } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, ChevronRight, ExternalLink, Loader2, Server, Key, Shield, UserPlus } from 'lucide-react';
+import {
+  CheckCircle2,
+  Loader2,
+  ExternalLink,
+  ChevronRight,
+  ArrowLeft,
+  Sparkles,
+  GitFork,
+  Globe,
+  RefreshCw,
+  UserPlus,
+} from 'lucide-react';
 import type { SetupStatus, SiaRegistrationResponse, SiaCheckResponse } from '@/lib/types';
 
 // ── Step Configuration ─────────────────────────────────────────────────
 
-const STEPS = [
-  { id: 'sia', label: 'Sia Storage', icon: Server },
-  { id: 'openrouter', label: 'OpenRouter', icon: Key },
-  { id: 'providers', label: 'Providers', icon: Shield },
-  { id: 'signup', label: 'Sign Up', icon: UserPlus },
-] as const;
+type Step = 'sia' | 'providers' | 'signup';
 
-type StepId = (typeof STEPS)[number]['id'];
+const STEP_ORDER: Step[] = ['sia', 'providers', 'signup'];
+
+const STEP_LABELS: Record<Step, string> = {
+  sia: 'Sia Storage',
+  providers: 'Providers',
+  signup: 'Sign Up',
+};
 
 // ── Helper: Generate Random App ID ─────────────────────────────────────
 
@@ -27,6 +39,80 @@ function generateAppId(): string {
   return result;
 }
 
+// ── Reducer for Persisted Setup State ──────────────────────────────────
+
+type SetupState = {
+  loading: boolean;
+  step: Step;
+  siaConfirmed: boolean;
+  provConfirmed: boolean;
+  siaIndexerUrl: string;
+  siaAppId: string;
+  siaAppName: string;
+  siaAppDescription: string;
+  webauthnRpId: string;
+  webauthnOrigin: string;
+};
+
+type SetupAction =
+  | { type: 'LOAD_PERSISTED'; payload: Partial<SetupState> }
+  | { type: 'SET_LOADING'; payload: boolean }
+  | { type: 'SET_STEP'; payload: Step }
+  | { type: 'SET_SIA_CONFIRMED'; payload: boolean }
+  | { type: 'SET_PROV_CONFIRMED'; payload: boolean }
+  | { type: 'SET_SIA_INDEXER_URL'; payload: string }
+  | { type: 'SET_SIA_APP_ID'; payload: string }
+  | { type: 'SET_SIA_APP_NAME'; payload: string }
+  | { type: 'SET_SIA_APP_DESCRIPTION'; payload: string }
+  | { type: 'SET_WEBAUTHN_RP_ID'; payload: string }
+  | { type: 'SET_WEBAUTHN_ORIGIN'; payload: string };
+
+function setupReducer(state: SetupState, action: SetupAction): SetupState {
+  switch (action.type) {
+    case 'LOAD_PERSISTED':
+      return { ...state, ...action.payload };
+    case 'SET_LOADING':
+      return { ...state, loading: action.payload };
+    case 'SET_STEP':
+      return { ...state, step: action.payload };
+    case 'SET_SIA_CONFIRMED':
+      return { ...state, siaConfirmed: action.payload };
+    case 'SET_PROV_CONFIRMED':
+      return { ...state, provConfirmed: action.payload };
+    case 'SET_SIA_INDEXER_URL':
+      return { ...state, siaIndexerUrl: action.payload };
+    case 'SET_SIA_APP_ID':
+      return { ...state, siaAppId: action.payload };
+    case 'SET_SIA_APP_NAME':
+      return { ...state, siaAppName: action.payload };
+    case 'SET_SIA_APP_DESCRIPTION':
+      return { ...state, siaAppDescription: action.payload };
+    case 'SET_WEBAUTHN_RP_ID':
+      return { ...state, webauthnRpId: action.payload };
+    case 'SET_WEBAUTHN_ORIGIN':
+      return { ...state, webauthnOrigin: action.payload };
+    default:
+      return state;
+  }
+}
+
+const initialSetupState: SetupState = {
+  loading: true,
+  step: 'sia',
+  siaConfirmed: false,
+  provConfirmed: false,
+  siaIndexerUrl: 'https://sia.storage',
+  siaAppId: '',
+  siaAppName: 'ReBit',
+  siaAppDescription: 'Decentralized video clipping engine',
+  webauthnRpId:
+    typeof window !== 'undefined' ? window.location.hostname : 'localhost',
+  webauthnOrigin:
+    typeof window !== 'undefined'
+      ? window.location.origin
+      : 'http://localhost:3000',
+};
+
 // ── Setup Wizard Page ──────────────────────────────────────────────────
 
 export default function SetupPage() {
@@ -34,116 +120,124 @@ export default function SetupPage() {
 
   // ── State ──────────────────────────────────────────────────────────
 
-  const [loading, setLoading] = useState(true);
-  const [currentStep, setCurrentStep] = useState<StepId>('sia');
-  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [state, dispatch] = useReducer(setupReducer, initialSetupState);
 
-  // Sia step state
-  const [siaIndexerUrl, setSiaIndexerUrl] = useState('https://sia.storage');
-  const [siaAppId, setSiaAppId] = useState('');
-  const [siaAppName, setSiaAppName] = useState('ReBit');
-  const [siaAppDescription, setSiaAppDescription] = useState('Decentralized video clipping engine');
+  // Sia state (not persisted)
   const [siaRecoveryPhrase, setSiaRecoveryPhrase] = useState('');
-  const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
   const [siaLoading, setSiaLoading] = useState(false);
   const [siaError, setSiaError] = useState<string | null>(null);
-  const [siaConfirmed, setSiaConfirmed] = useState(false);
+  const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
   const [checkingApproval, setCheckingApproval] = useState(false);
 
-  // OpenRouter step state
-  const [openrouterKey, setOpenrouterKey] = useState('');
-  const [orLoading, setOrLoading] = useState(false);
-  const [orError, setOrError] = useState<string | null>(null);
-  const [orConfirmed, setOrConfirmed] = useState(false);
-
-  // Providers step state
+  // Providers state (not persisted)
   const [googleClientId, setGoogleClientId] = useState('');
   const [googleClientSecret, setGoogleClientSecret] = useState('');
   const [githubClientId, setGithubClientId] = useState('');
   const [githubClientSecret, setGithubClientSecret] = useState('');
-  const [webauthnRpId, setWebauthnRpId] = useState('');
-  const [webauthnOrigin, setWebauthnOrigin] = useState('');
   const [provLoading, setProvLoading] = useState(false);
   const [provError, setProvError] = useState<string | null>(null);
-  const [provConfirmed, setProvConfirmed] = useState(false);
 
-  // ── Load Setup Status on Mount ─────────────────────────────────────
+  // Finishing state
+  const [finishing, setFinishing] = useState(false);
+
+  // ── Load Persisted State from DB on Mount ──────────────────────────
 
   useEffect(() => {
+    let cancelled = false;
+
     async function load() {
       try {
         const res = await fetch('/api/setup/status');
-        if (res.ok) {
-          const data: SetupStatus = await res.json();
-          setSetupStatus(data);
+        const data: SetupStatus = await res.json();
 
-          // Pre-fill from existing config
-          if (data.siaIndexerUrl) setSiaIndexerUrl(data.siaIndexerUrl);
-          if (data.siaAppId) setSiaAppId(data.siaAppId);
-          if (data.siaAppName) setSiaAppName(data.siaAppName);
-          if (data.siaAppDescription) setSiaAppDescription(data.siaAppDescription);
+        if (cancelled) return;
 
-          // Determine which step to show
-          if (data.setupComplete) {
-            router.push('/');
-            return;
-          }
-          if (data.siaConnected) setSiaConfirmed(true);
-          if (data.hasOpenrouterKey) setOrConfirmed(true);
-          if (data.hasGoogle || data.hasGitHub || data.hasWebauthn) setProvConfirmed(true);
-
-          // Find first incomplete step
-          if (!data.siaConnected) setCurrentStep('sia');
-          else if (!data.hasOpenrouterKey) setCurrentStep('openrouter');
-          else if (!data.hasGoogle && !data.hasGitHub && !data.hasWebauthn) setCurrentStep('providers');
-          else setCurrentStep('signup');
+        if (data.setupComplete) {
+          router.push('/');
+          return;
         }
-      } catch (err) {
-        console.error('Failed to load setup status:', err);
-      } finally {
-        setLoading(false);
+
+        const updates: Partial<SetupState> = { loading: false };
+
+        // Restore Sia state
+        if (data.siaConnected) {
+          updates.siaConfirmed = true;
+          if (data.siaIndexerUrl) updates.siaIndexerUrl = data.siaIndexerUrl;
+          if (data.siaAppId) updates.siaAppId = data.siaAppId;
+          if (data.siaAppName) updates.siaAppName = data.siaAppName;
+          if (data.siaAppDescription)
+            updates.siaAppDescription = data.siaAppDescription;
+        }
+
+        // Restore providers state
+        if (data.hasGoogle || data.hasGitHub || data.hasWebauthn) {
+          updates.provConfirmed = true;
+        }
+
+        // Fetch provider details
+        try {
+          const provRes = await fetch('/api/setup/providers');
+          const provData = await provRes.json();
+          if (provData.webauthnRpId)
+            updates.webauthnRpId = provData.webauthnRpId;
+          if (provData.webauthnOrigin)
+            updates.webauthnOrigin = provData.webauthnOrigin;
+        } catch {
+          // ignore
+        }
+
+        // Determine first incomplete step
+        if (!data.siaConnected) updates.step = 'sia';
+        else if (!data.hasGoogle && !data.hasGitHub && !data.hasWebauthn)
+          updates.step = 'providers';
+        else updates.step = 'signup';
+
+        dispatch({ type: 'LOAD_PERSISTED', payload: updates });
+      } catch {
+        if (!cancelled) {
+          dispatch({ type: 'SET_LOADING', payload: false });
+        }
       }
     }
+
     load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
-  // ── Step Navigation ────────────────────────────────────────────────
+  // ── Navigation ─────────────────────────────────────────────────────
 
-  const goToStep = useCallback((step: StepId) => {
-    setCurrentStep(step);
+  function goTo(s: Step) {
+    dispatch({ type: 'SET_STEP', payload: s });
     setSiaError(null);
-    setOrError(null);
     setProvError(null);
-  }, []);
-
-  const isStepComplete = useCallback(
-    (step: StepId): boolean => {
-      switch (step) {
-        case 'sia': return siaConfirmed;
-        case 'openrouter': return orConfirmed;
-        case 'providers': return provConfirmed;
-        case 'signup': return false;
-      }
-    },
-    [siaConfirmed, orConfirmed, provConfirmed]
-  );
+  }
 
   // ── Sia Handlers ───────────────────────────────────────────────────
 
   async function handleSiaSubmit() {
+    if (
+      !state.siaIndexerUrl.trim() ||
+      !state.siaAppId.trim() ||
+      !state.siaAppName.trim()
+    )
+      return;
     setSiaLoading(true);
     setSiaError(null);
+    setApprovalUrl(null);
 
     try {
       const res = await fetch('/api/setup/sia', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          siaIndexerUrl,
-          siaAppId,
-          siaAppName,
-          siaAppDescription,
-          recoveryPhrase: siaRecoveryPhrase,
+          siaIndexerUrl: state.siaIndexerUrl.trim(),
+          siaAppId: state.siaAppId.trim(),
+          siaAppName: state.siaAppName.trim(),
+          siaAppDescription: state.siaAppDescription.trim(),
+          recoveryPhrase: siaRecoveryPhrase.trim(),
         }),
       });
 
@@ -151,7 +245,7 @@ export default function SetupPage() {
 
       if (!data.ok) {
         if (data.already_connected) {
-          setSiaConfirmed(true);
+          dispatch({ type: 'SET_SIA_CONFIRMED', payload: true });
           return;
         }
         setSiaError(data.error || 'Registration failed');
@@ -162,7 +256,9 @@ export default function SetupPage() {
         setApprovalUrl(data.approval_url);
       }
     } catch (err) {
-      setSiaError(err instanceof Error ? err.message : 'Failed to contact server');
+      setSiaError(
+        err instanceof Error ? err.message : 'Failed to contact server'
+      );
     } finally {
       setSiaLoading(false);
     }
@@ -181,76 +277,53 @@ export default function SetupPage() {
       const data: SiaCheckResponse = await res.json();
 
       if (data.ok && data.status === 'approved') {
-        setSiaConfirmed(true);
+        dispatch({ type: 'SET_SIA_CONFIRMED', payload: true });
         setApprovalUrl(null);
         setSiaRecoveryPhrase(''); // Clear from memory
       } else if (data.ok && data.status === 'pending') {
-        setSiaError('Still pending approval. Please approve the app on the Sia indexer and try again.');
+        setSiaError(
+          'Still pending approval. Please approve the app on the Sia indexer and try again.'
+        );
       } else {
         setSiaError(data.error || 'Failed to check approval status');
       }
     } catch (err) {
-      setSiaError(err instanceof Error ? err.message : 'Failed to check approval');
+      setSiaError(
+        err instanceof Error ? err.message : 'Failed to check approval'
+      );
     } finally {
       setCheckingApproval(false);
     }
   }
 
-  // ── OpenRouter Handler ─────────────────────────────────────────────
-
-  async function handleOrSubmit() {
-    setOrLoading(true);
-    setOrError(null);
-
-    try {
-      const res = await fetch('/api/setup/openrouter', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ openrouterKey }),
-      });
-
-      if (res.ok) {
-        setOrConfirmed(true);
-      } else {
-        const data = await res.json();
-        setOrError(data.error || 'Failed to save OpenRouter key');
-      }
-    } catch (err) {
-      setOrError(err instanceof Error ? err.message : 'Failed to save OpenRouter key');
-    } finally {
-      setOrLoading(false);
-    }
-  }
-
   // ── Providers Handler ──────────────────────────────────────────────
 
-  async function handleProvSubmit() {
+  async function handleProvidersSubmit() {
+    if (!googleClientId.trim() && !githubClientId.trim()) return;
     setProvLoading(true);
     setProvError(null);
 
     try {
-      // Save provider configs to AppSettings
-      const res = await fetch('/api/setup/status', {
+      const res = await fetch('/api/setup/providers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          googleClientId,
-          googleClientSecret,
-          githubClientId,
-          githubClientSecret,
-          webauthnRpId,
-          webauthnOrigin,
+          googleClientId: googleClientId.trim() || undefined,
+          googleClientSecret: googleClientSecret.trim() || undefined,
+          githubClientId: githubClientId.trim() || undefined,
+          githubClientSecret: githubClientSecret.trim() || undefined,
+          webauthnRpId: state.webauthnRpId.trim() || undefined,
+          webauthnOrigin: state.webauthnOrigin.trim() || undefined,
         }),
       });
 
-      if (res.ok) {
-        setProvConfirmed(true);
-      } else {
-        const data = await res.json();
-        setProvError(data.error || 'Failed to save provider configuration');
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Failed to save');
+      dispatch({ type: 'SET_PROV_CONFIRMED', payload: true });
     } catch (err) {
-      setProvError(err instanceof Error ? err.message : 'Failed to save provider configuration');
+      setProvError(
+        err instanceof Error ? err.message : 'Something went wrong'
+      );
     } finally {
       setProvLoading(false);
     }
@@ -258,463 +331,803 @@ export default function SetupPage() {
 
   // ── Complete Setup ─────────────────────────────────────────────────
 
-  async function handleCompleteSetup() {
+  async function handleFinish() {
+    setFinishing(true);
     try {
       await fetch('/api/setup/complete', { method: 'POST' });
       router.push('/login');
-    } catch (err) {
-      console.error('Failed to complete setup:', err);
+    } catch {
+      router.push('/login');
     }
   }
 
   // ── Loading State ──────────────────────────────────────────────────
 
-  if (loading) {
+  if (state.loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="animate-spin" size={32} />
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: 'var(--bg)' }}
+      >
+        <Loader2
+          className="w-6 h-6 animate-spin"
+          style={{ color: 'var(--subtle)' }}
+        />
       </div>
     );
   }
 
+  // Completion state for each step
+  const stepsState: Record<Step, boolean> = {
+    sia: state.siaConfirmed,
+    providers: state.provConfirmed,
+    signup: false,
+  };
+
   // ── Render ─────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-8">
-      <div className="w-full max-w-2xl">
+    <div
+      className="min-h-screen flex items-start justify-center pt-12 px-4 pb-12"
+      style={{ background: 'var(--bg)' }}
+    >
+      <div className="w-full max-w-lg">
         {/* Header */}
-        <div className="text-center mb-12">
+        <div className="text-center mb-8">
           <h1 className="text-3xl font-bold mb-2">Welcome to ReBit</h1>
-          <p className="opacity-60">Let's get you set up in a few steps</p>
+          <p className="opacity-60">
+            Let&apos;s get you set up in a few steps
+          </p>
         </div>
 
-        {/* Step Indicators */}
-        <div className="flex items-center justify-center gap-2 mb-12">
-          {STEPS.map((step, i) => {
-            const StepIcon = step.icon;
-            const complete = isStepComplete(step.id);
-            const active = currentStep === step.id;
-
+        {/* ── Interactive Step Indicators ── */}
+        <div className="flex items-center justify-center gap-2 mb-8">
+          {STEP_ORDER.map((s, i) => {
+            const isDone = stepsState[s];
+            const isActive = state.step === s;
             return (
-              <div key={step.id} className="flex items-center gap-2">
-                {i > 0 && (
+              <div key={s} className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => goTo(s)}
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all cursor-pointer"
+                  style={{
+                    background: isDone
+                      ? 'var(--success)'
+                      : isActive
+                        ? 'rgba(16,185,129,0.15)'
+                        : 'var(--border)',
+                    color: isDone
+                      ? '#fff'
+                      : isActive
+                        ? 'var(--success)'
+                        : 'var(--subtle)',
+                    border: isActive
+                      ? '1px solid rgba(16,185,129,0.4)'
+                      : '1px solid transparent',
+                  }}
+                  title={
+                    isDone
+                      ? `${STEP_LABELS[s]} \u2014 completed (click to re-do)`
+                      : isActive
+                        ? `${STEP_LABELS[s]} \u2014 current step`
+                        : STEP_LABELS[s]
+                  }
+                >
+                  {isDone ? <CheckCircle2 className="w-4 h-4" /> : i + 1}
+                </button>
+                {i < STEP_ORDER.length - 1 && (
                   <div
-                    className="w-8 h-px"
-                    style={{ background: complete ? 'var(--accent)' : 'var(--border)' }}
+                    className="w-12 h-px"
+                    style={{
+                      background: stepsState[STEP_ORDER[i]]
+                        ? 'var(--success)'
+                        : 'var(--border)',
+                    }}
                   />
                 )}
-                <button
-                  onClick={() => goToStep(step.id)}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all
-                    ${active ? 'bg-accent/10 text-accent' : ''}
-                    ${complete ? 'text-success' : 'opacity-50'}
-                  `}
-                >
-                  <StepIcon size={16} />
-                  <span className="hidden sm:inline">{step.label}</span>
-                  {complete && <Check size={14} />}
-                </button>
               </div>
             );
           })}
         </div>
 
-        {/* Step Content */}
-        <div className="rounded-xl p-8" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        {/* Subtitle showing what's completed */}
+        <div className="text-center mb-6">
+          <p className="text-xs" style={{ color: 'var(--muted)' }}>
+            {state.siaConfirmed && '\u2714 Sia connected '}
+            {state.siaConfirmed && state.provConfirmed && '\u2022 '}
+            {state.provConfirmed && '\u2714 Providers configured '}
+            {!state.siaConfirmed && !state.provConfirmed &&
+              'No steps completed yet'}
+          </p>
+        </div>
+
+        {/* ── Step Content ── */}
+        <div
+          className="rounded-xl p-8"
+          style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+          }}
+        >
           {/* ── Step 1: Sia ─────────────────────────────────────────── */}
-          {currentStep === 'sia' && (
+          {state.step === 'sia' && (
             <div className="space-y-6">
-              <div>
-                <h2 className="text-xl font-semibold mb-1">Sia Decentralized Storage</h2>
+              <div className="text-center">
+                <h2 className="text-xl font-semibold mb-2">
+                  Sia Decentralized Storage
+                </h2>
                 <p className="text-sm opacity-60">
-                  Connect to the Sia network for decentralized file storage.
-                  All uploaded videos and clips will be stored on Sia.
-                </p>
-              </div>
-
-              {siaConfirmed ? (
-                <div className="p-4 rounded-lg" style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
-                  <div className="flex items-center gap-2 text-success">
-                    <Check size={20} />
-                    <span className="font-medium">Sia storage configured and connected</span>
-                  </div>
-                </div>
-              ) : approvalUrl ? (
-                <div className="space-y-4">
-                  <div className="p-4 rounded-lg" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
-                    <p className="text-sm mb-3">
-                      Configuration saved — approval needed. Open the link below to approve
-                      this app on the Sia indexer, then come back and click "I've approved it".
-                    </p>
-                    <a
-                      href={approvalUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium"
-                      style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
-                    >
-                      Open approval URL <ExternalLink size={14} />
-                    </a>
-                  </div>
-
-                  <button
-                    onClick={handleCheckApproval}
-                    disabled={checkingApproval}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all"
-                    style={{ background: 'var(--accent)', color: 'var(--accent-fg)', opacity: checkingApproval ? 0.7 : 1 }}
-                  >
-                    {checkingApproval ? (
-                      <><Loader2 size={16} className="animate-spin" /> Checking...</>
-                    ) : (
-                      <><Check size={16} /> I've approved it</>
-                    )}
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Sia Indexer URL</label>
-                    <input
-                      type="url"
-                      value={siaIndexerUrl}
-                      onChange={(e) => setSiaIndexerUrl(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      placeholder="https://sia.storage"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Sia App ID</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={siaAppId}
-                        onChange={(e) => setSiaAppId(e.target.value)}
-                        className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
-                        style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                        placeholder="64-character hex string"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setSiaAppId(generateAppId())}
-                        className="px-3 py-2 rounded-lg text-sm"
-                        style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
-                      >
-                        Generate
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">App Name</label>
-                    <input
-                      type="text"
-                      value={siaAppName}
-                      onChange={(e) => setSiaAppName(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      placeholder="ReBit"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">App Description</label>
-                    <input
-                      type="text"
-                      value={siaAppDescription}
-                      onChange={(e) => setSiaAppDescription(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      placeholder="Decentralized video clipping engine"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">
-                      BIP-39 Recovery Phrase
-                      <span className="text-xs opacity-50 ml-2">(12 or 24 words — never stored)</span>
-                    </label>
-                    <textarea
-                      value={siaRecoveryPhrase}
-                      onChange={(e) => setSiaRecoveryPhrase(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm font-mono"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      rows={3}
-                      placeholder="Enter your 12 or 24 word recovery phrase..."
-                    />
-                    <p className="text-xs opacity-50 mt-1">
-                      Your recovery phrase is used once to derive an App Key, then discarded.
-                      It is never stored on disk or in the database.
-                    </p>
-                  </div>
-
-                  {siaError && (
-                    <div className="p-3 rounded-lg text-sm" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: 'var(--danger)' }}>
-                      {siaError}
-                    </div>
-                  )}
-
-                  <button
-                    onClick={handleSiaSubmit}
-                    disabled={siaLoading || !siaIndexerUrl || !siaAppId || !siaRecoveryPhrase}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all"
-                    style={{
-                      background: 'var(--accent)',
-                      color: 'var(--accent-fg)',
-                      opacity: siaLoading || !siaIndexerUrl || !siaAppId || !siaRecoveryPhrase ? 0.5 : 1,
-                    }}
-                  >
-                    {siaLoading ? (
-                      <><Loader2 size={16} className="animate-spin" /> Starting registration...</>
-                    ) : (
-                      'Start Sia Registration'
-                    )}
-                  </button>
-                </div>
-              )}
-
-              {siaConfirmed && (
-                <div className="flex justify-end">
-                  <button
-                    onClick={() => goToStep('openrouter')}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium"
-                    style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
-                  >
-                    Next Step <ChevronRight size={16} />
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── Step 2: OpenRouter ──────────────────────────────────── */}
-          {currentStep === 'openrouter' && (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-xl font-semibold mb-1">OpenRouter API Key</h2>
-                <p className="text-sm opacity-60">
-                  Enter your OpenRouter API key to enable AI-powered features
-                  like transcription, hook detection, and quality analysis.
-                </p>
-              </div>
-
-              {orConfirmed ? (
-                <div className="p-4 rounded-lg" style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
-                  <div className="flex items-center gap-2 text-success">
-                    <Check size={20} />
-                    <span className="font-medium">OpenRouter API key configured</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">OpenRouter API Key</label>
-                    <input
-                      type="password"
-                      value={openrouterKey}
-                      onChange={(e) => setOpenrouterKey(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm font-mono"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      placeholder="sk-or-v1-..."
-                    />
-                    <p className="text-xs opacity-50 mt-1">
-                      Get your key at{' '}
-                      <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="underline">
-                        openrouter.ai/keys
-                      </a>
-                    </p>
-                  </div>
-
-                  {orError && (
-                    <div className="p-3 rounded-lg text-sm" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: 'var(--danger)' }}>
-                      {orError}
-                    </div>
-                  )}
-
-                  <button
-                    onClick={handleOrSubmit}
-                    disabled={orLoading || !openrouterKey}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all"
-                    style={{
-                      background: 'var(--accent)',
-                      color: 'var(--accent-fg)',
-                      opacity: orLoading || !openrouterKey ? 0.5 : 1,
-                    }}
-                  >
-                    {orLoading ? (
-                      <><Loader2 size={16} className="animate-spin" /> Saving...</>
-                    ) : (
-                      'Save OpenRouter Key'
-                    )}
-                  </button>
-                </div>
-              )}
-
-              {orConfirmed && (
-                <div className="flex justify-end">
-                  <button
-                    onClick={() => goToStep('providers')}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium"
-                    style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
-                  >
-                    Next Step <ChevronRight size={16} />
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── Step 3: Providers ───────────────────────────────────── */}
-          {currentStep === 'providers' && (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-xl font-semibold mb-1">Authentication Providers</h2>
-                <p className="text-sm opacity-60">
-                  Configure social login and passkey authentication.
-                  All fields are optional — you can skip this step and configure later.
+                  {state.siaConfirmed
+                    ? 'Sia is already configured. You can update the settings below.'
+                    : 'Connect to the Sia network for decentralized file storage. All uploaded videos and clips will be stored on Sia.'}
                 </p>
               </div>
 
               <div className="space-y-4">
-                <div className="p-4 rounded-lg" style={{ background: 'rgba(59,130,246,0.05)', border: '1px solid var(--border)' }}>
-                  <h3 className="font-medium mb-3">Google OAuth</h3>
-                  <div className="space-y-2">
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Sia Indexer URL
+                  </label>
+                  <input
+                    type="url"
+                    value={state.siaIndexerUrl}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'SET_SIA_INDEXER_URL',
+                        payload: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
+                    style={{
+                      background: 'var(--bg)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text)',
+                      opacity: state.siaConfirmed && !siaLoading ? 0.6 : 1,
+                    }}
+                    placeholder="https://sia.storage"
+                    disabled={siaLoading}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Sia App ID
+                  </label>
+                  <div className="flex gap-2">
                     <input
                       type="text"
-                      value={googleClientId}
-                      onChange={(e) => setGoogleClientId(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      placeholder="Google Client ID"
+                      value={state.siaAppId}
+                      onChange={(e) =>
+                        dispatch({
+                          type: 'SET_SIA_APP_ID',
+                          payload: e.target.value,
+                        })
+                      }
+                      className="flex-1 px-3 py-2.5 rounded-lg text-sm font-mono outline-none"
+                      style={{
+                        background: 'var(--bg)',
+                        border: '1px solid var(--border)',
+                        color: 'var(--text)',
+                        opacity: state.siaConfirmed && !siaLoading ? 0.6 : 1,
+                      }}
+                      placeholder="64-character hex string"
+                      disabled={siaLoading}
                     />
-                    <input
-                      type="password"
-                      value={googleClientSecret}
-                      onChange={(e) => setGoogleClientSecret(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      placeholder="Google Client Secret"
-                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        dispatch({
+                          type: 'SET_SIA_APP_ID',
+                          payload: generateAppId(),
+                        })
+                      }
+                      disabled={siaLoading}
+                      className="px-3 py-2.5 rounded-lg text-sm font-medium"
+                      style={{
+                        background: 'rgba(16,185,129,0.1)',
+                        color: 'var(--success)',
+                        border: '1px solid rgba(16,185,129,0.25)',
+                      }}
+                    >
+                      Generate
+                    </button>
                   </div>
                 </div>
 
-                <div className="p-4 rounded-lg" style={{ background: 'rgba(59,130,246,0.05)', border: '1px solid var(--border)' }}>
-                  <h3 className="font-medium mb-3">GitHub OAuth</h3>
-                  <div className="space-y-2">
-                    <input
-                      type="text"
-                      value={githubClientId}
-                      onChange={(e) => setGithubClientId(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      placeholder="GitHub Client ID"
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    App Name
+                  </label>
+                  <input
+                    type="text"
+                    value={state.siaAppName}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'SET_SIA_APP_NAME',
+                        payload: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
+                    style={{
+                      background: 'var(--bg)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text)',
+                      opacity: state.siaConfirmed && !siaLoading ? 0.6 : 1,
+                    }}
+                    placeholder="ReBit"
+                    disabled={siaLoading}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    App Description (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={state.siaAppDescription}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'SET_SIA_APP_DESCRIPTION',
+                        payload: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
+                    style={{
+                      background: 'var(--bg)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text)',
+                      opacity: state.siaConfirmed && !siaLoading ? 0.6 : 1,
+                    }}
+                    placeholder="Decentralized video clipping engine"
+                    disabled={siaLoading}
+                  />
+                </div>
+
+                {!state.siaConfirmed && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      BIP-39 Recovery Phrase
+                      <span className="text-xs opacity-50 ml-2">
+                        (12 or 24 words \u2014 never stored)
+                      </span>
+                    </label>
+                    <textarea
+                      value={siaRecoveryPhrase}
+                      onChange={(e) => setSiaRecoveryPhrase(e.target.value)}
+                      className="w-full px-3 py-2.5 rounded-lg text-sm font-mono outline-none resize-none"
+                      style={{
+                        background: 'var(--bg)',
+                        border: '1px solid var(--border)',
+                        color: 'var(--text)',
+                      }}
+                      rows={3}
+                      placeholder="Enter your 12 or 24 word recovery phrase..."
                     />
-                    <input
-                      type="password"
-                      value={githubClientSecret}
-                      onChange={(e) => setGithubClientSecret(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      placeholder="GitHub Client Secret"
+                    <p className="text-xs opacity-50 mt-1">
+                      Your recovery phrase is used once to derive an App Key,
+                      then discarded. It is never stored on disk or in the
+                      database.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {siaError && (
+                <div
+                  className="px-4 py-3 rounded-lg text-sm"
+                  style={{
+                    background: 'rgba(239,68,68,0.08)',
+                    border: '1px solid rgba(239,68,68,0.25)',
+                    color: 'var(--danger)',
+                  }}
+                >
+                  {siaError}
+                </div>
+              )}
+
+              {approvalUrl && !state.siaConfirmed ? (
+                <div
+                  className="px-4 py-4 rounded-lg space-y-3"
+                  style={{
+                    background: 'rgba(16,185,129,0.06)',
+                    border: '1px solid rgba(16,185,129,0.2)',
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2
+                      className="w-4 h-4"
+                      style={{ color: 'var(--success)' }}
                     />
+                    <span
+                      className="text-sm font-semibold"
+                      style={{ color: 'var(--success)' }}
+                    >
+                      Configuration saved \u2014 approval required
+                    </span>
+                  </div>
+                  <p className="text-sm" style={{ color: 'var(--subtle)' }}>
+                    Open the URL below to authorize the app on the Sia indexer,
+                    then come back and click{' '}
+                    <strong>I&apos;ve approved it</strong>.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={approvalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded text-sm font-medium"
+                      style={{
+                        background: 'var(--accent)',
+                        color: 'var(--accent-fg)',
+                      }}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Open approval URL
+                    </a>
+                    <button
+                      onClick={handleCheckApproval}
+                      disabled={checkingApproval}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded text-sm font-semibold transition-all disabled:opacity-40"
+                      style={{
+                        background: 'rgba(16,185,129,0.1)',
+                        color: 'var(--success)',
+                        border: '1px solid rgba(16,185,129,0.25)',
+                      }}
+                    >
+                      {checkingApproval ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                      )}
+                      {checkingApproval
+                        ? 'Checking\u2026'
+                        : "I've approved it"}
+                    </button>
+                  </div>
+                </div>
+              ) : state.siaConfirmed && (
+                <div
+                  className="flex items-center gap-2 px-4 py-3 rounded-lg"
+                  style={{
+                    background: 'rgba(16,185,129,0.06)',
+                    border: '1px solid rgba(16,185,129,0.2)',
+                  }}
+                >
+                  <CheckCircle2
+                    className="w-4 h-4"
+                    style={{ color: 'var(--success)' }}
+                  />
+                  <span className="text-sm" style={{ color: 'var(--success)' }}>
+                    Sia storage configured and connected
+                  </span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <div />
+                <div className="flex items-center gap-3">
+                  {state.siaConfirmed && (
+                    <button
+                      onClick={() =>
+                        dispatch({
+                          type: 'SET_SIA_CONFIRMED',
+                          payload: false,
+                        })
+                      }
+                      className="flex items-center gap-1.5 text-sm"
+                      style={{ color: 'var(--subtle)' }}
+                    >
+                      <RefreshCw className="w-3 h-3" /> Re-do
+                    </button>
+                  )}
+                  {approvalUrl && !state.siaConfirmed ? null : state
+                    .siaConfirmed ? (
+                    <button
+                      onClick={() => goTo('providers')}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold"
+                      style={{
+                        background: 'var(--accent)',
+                        color: 'var(--accent-fg)',
+                      }}
+                    >
+                      Next step <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleSiaSubmit}
+                      disabled={
+                        !state.siaIndexerUrl.trim() ||
+                        !state.siaAppId.trim() ||
+                        !state.siaAppName.trim() ||
+                        !siaRecoveryPhrase.trim() ||
+                        siaLoading
+                      }
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-40"
+                      style={{
+                        background: 'var(--accent)',
+                        color: 'var(--accent-fg)',
+                      }}
+                    >
+                      {siaLoading ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />{' '}
+                          Configuring\u2026
+                        </>
+                      ) : (
+                        'Start Sia Registration'
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step 2: Providers ───────────────────────────────────── */}
+          {state.step === 'providers' && (
+            <div className="space-y-6">
+              <div className="text-center">
+                <h2 className="text-xl font-semibold mb-2">
+                  Authentication Providers
+                </h2>
+                <p className="text-sm opacity-60">
+                  {state.provConfirmed
+                    ? 'Providers have been configured. You can update them below.'
+                    : 'Configure at least one OAuth provider so users can sign in. All fields are optional \u2014 you can skip this step and configure later.'}
+                </p>
+              </div>
+
+              <div className="space-y-6">
+                {/* Google */}
+                <div
+                  className="p-4 rounded-lg"
+                  style={{
+                    border: '1px solid var(--border)',
+                    background: 'var(--bg)',
+                  }}
+                >
+                  <div className="flex items-center gap-2 mb-3">
+                    <Globe
+                      className="w-4 h-4"
+                      style={{ color: 'var(--subtle)' }}
+                    />
+                    <span className="text-sm font-semibold">Google OAuth</span>
+                  </div>
+                  <div
+                    className="px-3 py-2 rounded-lg mb-3 text-xs"
+                    style={{
+                      background: 'rgba(59,130,246,0.08)',
+                      border: '1px solid rgba(59,130,246,0.2)',
+                      color: 'var(--blue)',
+                    }}
+                  >
+                    Set the callback URL in Google Cloud Console to:
+                    <br />
+                    <strong className="select-all">
+                      {typeof window !== 'undefined'
+                        ? window.location.origin
+                        : 'http://localhost:3000'}
+                      /api/auth/callback/google
+                    </strong>
+                  </div>
+                  <div className="space-y-3">
+                    <div>
+                      <label
+                        className="block text-xs mb-1"
+                        style={{ color: 'var(--subtle)' }}
+                      >
+                        Client ID
+                      </label>
+                      <input
+                        type="text"
+                        value={googleClientId}
+                        onChange={(e) => setGoogleClientId(e.target.value)}
+                        placeholder="xxx.apps.googleusercontent.com"
+                        className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                        style={{
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--text)',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label
+                        className="block text-xs mb-1"
+                        style={{ color: 'var(--subtle)' }}
+                      >
+                        Client Secret
+                      </label>
+                      <input
+                        type="password"
+                        value={googleClientSecret}
+                        onChange={(e) => setGoogleClientSecret(e.target.value)}
+                        placeholder="GOCSX-..."
+                        className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                        style={{
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--text)',
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
 
-                <div className="p-4 rounded-lg" style={{ background: 'rgba(59,130,246,0.05)', border: '1px solid var(--border)' }}>
-                  <h3 className="font-medium mb-3">Passkeys / WebAuthn</h3>
-                  <div className="space-y-2">
-                    <input
-                      type="text"
-                      value={webauthnRpId}
-                      onChange={(e) => setWebauthnRpId(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      placeholder="Relying Party ID (e.g., localhost)"
+                {/* GitHub */}
+                <div
+                  className="p-4 rounded-lg"
+                  style={{
+                    border: '1px solid var(--border)',
+                    background: 'var(--bg)',
+                  }}
+                >
+                  <div className="flex items-center gap-2 mb-3">
+                    <GitFork
+                      className="w-4 h-4"
+                      style={{ color: 'var(--subtle)' }}
                     />
-                    <input
-                      type="text"
-                      value={webauthnOrigin}
-                      onChange={(e) => setWebauthnOrigin(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-                      placeholder="Origin (e.g., http://localhost:3000)"
-                    />
+                    <span className="text-sm font-semibold">GitHub OAuth</span>
+                  </div>
+                  <div
+                    className="px-3 py-2 rounded-lg mb-3 text-xs"
+                    style={{
+                      background: 'rgba(59,130,246,0.08)',
+                      border: '1px solid rgba(59,130,246,0.2)',
+                      color: 'var(--blue)',
+                    }}
+                  >
+                    Set the callback URL in GitHub OAuth settings to:
+                    <br />
+                    <strong className="select-all">
+                      {typeof window !== 'undefined'
+                        ? window.location.origin
+                        : 'http://localhost:3000'}
+                      /api/auth/callback/github
+                    </strong>
+                  </div>
+                  <div className="space-y-3">
+                    <div>
+                      <label
+                        className="block text-xs mb-1"
+                        style={{ color: 'var(--subtle)' }}
+                      >
+                        Client ID
+                      </label>
+                      <input
+                        type="text"
+                        value={githubClientId}
+                        onChange={(e) => setGithubClientId(e.target.value)}
+                        placeholder="Ov23..."
+                        className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                        style={{
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--text)',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label
+                        className="block text-xs mb-1"
+                        style={{ color: 'var(--subtle)' }}
+                      >
+                        Client Secret
+                      </label>
+                      <input
+                        type="password"
+                        value={githubClientSecret}
+                        onChange={(e) => setGithubClientSecret(e.target.value)}
+                        placeholder="cf14..."
+                        className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                        style={{
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--text)',
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
 
               {provError && (
-                <div className="p-3 rounded-lg text-sm" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: 'var(--danger)' }}>
+                <div
+                  className="px-4 py-3 rounded-lg text-sm"
+                  style={{
+                    background: 'rgba(239,68,68,0.08)',
+                    border: '1px solid rgba(239,68,68,0.25)',
+                    color: 'var(--danger)',
+                  }}
+                >
                   {provError}
                 </div>
               )}
 
-              <div className="flex gap-3">
-                <button
-                  onClick={() => { setProvConfirmed(true); goToStep('signup'); }}
-                  className="flex-1 px-4 py-3 rounded-lg font-medium text-sm"
-                  style={{ border: '1px solid var(--border)' }}
+              {state.provConfirmed && (
+                <div
+                  className="flex items-center gap-2 px-4 py-3 rounded-lg"
+                  style={{
+                    background: 'rgba(16,185,129,0.06)',
+                    border: '1px solid rgba(16,185,129,0.2)',
+                  }}
                 >
-                  Skip this step
+                  <CheckCircle2
+                    className="w-4 h-4"
+                    style={{ color: 'var(--success)' }}
+                  />
+                  <span className="text-sm" style={{ color: 'var(--success)' }}>
+                    Provider configuration saved
+                  </span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => goTo('sia')}
+                  className="flex items-center gap-1.5 text-sm"
+                  style={{ color: 'var(--subtle)' }}
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" /> Back
                 </button>
-                <button
-                  onClick={handleProvSubmit}
-                  disabled={provLoading}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium"
-                  style={{ background: 'var(--accent)', color: 'var(--accent-fg)', opacity: provLoading ? 0.7 : 1 }}
-                >
-                  {provLoading ? (
-                    <><Loader2 size={16} className="animate-spin" /> Saving...</>
-                  ) : (
-                    'Save & Continue'
+                <div className="flex items-center gap-3">
+                  {state.provConfirmed && (
+                    <button
+                      onClick={() =>
+                        dispatch({
+                          type: 'SET_PROV_CONFIRMED',
+                          payload: false,
+                        })
+                      }
+                      className="flex items-center gap-1.5 text-sm"
+                      style={{ color: 'var(--subtle)' }}
+                    >
+                      <RefreshCw className="w-3 h-3" /> Re-do
+                    </button>
                   )}
-                </button>
+                  {!state.provConfirmed ? (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          dispatch({
+                            type: 'SET_PROV_CONFIRMED',
+                            payload: true,
+                          });
+                          goTo('signup');
+                        }}
+                        className="px-3 py-2 rounded-lg text-sm font-medium"
+                        style={{ border: '1px solid var(--border)' }}
+                      >
+                        Skip
+                      </button>
+                      <button
+                        onClick={handleProvidersSubmit}
+                        disabled={
+                          (!googleClientId.trim() && !githubClientId.trim()) ||
+                          provLoading
+                        }
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-40"
+                        style={{
+                          background: 'var(--accent)',
+                          color: 'var(--accent-fg)',
+                        }}
+                      >
+                        {provLoading ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />{' '}
+                            Saving\u2026
+                          </>
+                        ) : (
+                          'Save providers'
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => goTo('signup')}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold"
+                      style={{
+                        background: 'var(--accent)',
+                        color: 'var(--accent-fg)',
+                      }}
+                    >
+                      Next step <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}
 
-          {/* ── Step 4: Sign Up ─────────────────────────────────────── */}
-          {currentStep === 'signup' && (
+          {/* ── Step 3: Sign Up ─────────────────────────────────────── */}
+          {state.step === 'signup' && (
             <div className="space-y-6 text-center">
-              <div className="flex justify-center">
-                <div className="p-4 rounded-full" style={{ background: 'rgba(16,185,129,0.1)' }}>
-                  <Check size={48} className="text-success" />
-                </div>
+              <div
+                className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-2"
+                style={{
+                  background: 'rgba(16,185,129,0.1)',
+                  border: '1px solid rgba(16,185,129,0.25)',
+                }}
+              >
+                <Sparkles
+                  className="w-8 h-8"
+                  style={{ color: 'var(--success)' }}
+                />
               </div>
 
               <div>
-                <h2 className="text-xl font-semibold mb-1">Setup Complete!</h2>
+                <h2 className="text-xl font-semibold mb-2">
+                  You&apos;re all configured!
+                </h2>
                 <p className="text-sm opacity-60">
-                  Your ReBit instance is configured and ready to go.
-                  Click below to create your first account and start using the platform.
+                  Everything is set up. Now create your account to become the
+                  platform super admin. The first person to sign up gets full
+                  administrative control.
                 </p>
               </div>
 
-              <div className="space-y-3 text-left">
-                <div className="flex items-center gap-3 p-3 rounded-lg" style={{ background: 'rgba(16,185,129,0.05)' }}>
-                  <Check size={16} className="text-success shrink-0" />
-                  <span className="text-sm">{siaConfirmed ? 'Sia storage connected' : 'Sia in demo mode'}</span>
-                </div>
-                <div className="flex items-center gap-3 p-3 rounded-lg" style={{ background: 'rgba(16,185,129,0.05)' }}>
-                  <Check size={16} className="text-success shrink-0" />
-                  <span className="text-sm">{orConfirmed ? 'OpenRouter API key configured' : 'OpenRouter not configured'}</span>
-                </div>
-                <div className="flex items-center gap-3 p-3 rounded-lg" style={{ background: 'rgba(16,185,129,0.05)' }}>
-                  <Check size={16} className="text-success shrink-0" />
-                  <span className="text-sm">
-                    {provConfirmed ? 'Authentication providers configured' : 'Authentication providers skipped (can configure later)'}
-                  </span>
-                </div>
+              <div className="space-y-2 text-left">
+                {[
+                  {
+                    label: 'Sia storage configured',
+                    done: state.siaConfirmed,
+                  },
+                  {
+                    label: 'Social login providers configured',
+                    done: state.provConfirmed,
+                  },
+                ].map((item) => (
+                  <div key={item.label} className="flex items-center gap-2">
+                    {item.done ? (
+                      <CheckCircle2
+                        className="w-4 h-4"
+                        style={{ color: 'var(--success)' }}
+                      />
+                    ) : (
+                      <div
+                        className="w-4 h-4 rounded-full border-2"
+                        style={{ borderColor: 'var(--muted)' }}
+                      />
+                    )}
+                    <span
+                      className="text-sm"
+                      style={{
+                        color: item.done ? 'var(--text)' : 'var(--subtle)',
+                      }}
+                    >
+                      {item.label}
+                    </span>
+                  </div>
+                ))}
               </div>
 
-              <button
-                onClick={handleCompleteSetup}
-                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium"
-                style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
-              >
-                Create Your Account <UserPlus size={16} />
-              </button>
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => goTo('providers')}
+                  className="flex items-center gap-1.5 text-sm"
+                  style={{ color: 'var(--subtle)' }}
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" /> Back
+                </button>
+                <button
+                  onClick={handleFinish}
+                  disabled={finishing}
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg text-sm font-semibold transition-all disabled:opacity-40"
+                  style={{
+                    background: 'var(--accent)',
+                    color: 'var(--accent-fg)',
+                  }}
+                >
+                  {finishing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <UserPlus className="w-4 h-4" />
+                  )}
+                  {finishing ? 'Redirecting\u2026' : 'Create your account \u2192'}
+                </button>
+              </div>
             </div>
           )}
         </div>

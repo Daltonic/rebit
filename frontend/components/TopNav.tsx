@@ -11,7 +11,7 @@ export default function TopNav() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const { collapsed, setMobileOpen } = useSidebar();
-  const isPublicPage = pathname === '/' || pathname === '/login';
+  const isPublicPage = pathname === '/' || pathname === '/login' || pathname === '/setup' || pathname === '/unauthorized';
   if (isPublicPage) return null;
 
   return (

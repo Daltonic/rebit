@@ -15,7 +15,7 @@ const NAV_ITEMS = [
 export default function Sidebar() {
   const pathname = usePathname();
   const { collapsed, setCollapsed, mobileOpen, setMobileOpen } = useSidebar();
-  const isPublicPage = pathname === '/' || pathname === '/login';
+  const isPublicPage = pathname === '/' || pathname === '/login' || pathname === '/setup' || pathname === '/unauthorized';
 
   // Close the mobile drawer whenever the route changes.
   useEffect(() => {

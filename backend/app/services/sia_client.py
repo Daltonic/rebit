@@ -209,7 +209,8 @@ async def registration_start(
         )
 
         # Create builder and request connection
-        builder = Builder(metadata).request_connection()
+        builder = Builder(indexer_url, metadata)
+        await builder.request_connection()
         approval_url = builder.response_url()
 
         _registration_builder = builder
@@ -239,11 +240,11 @@ async def registration_check() -> dict:
 
     try:
         # Wait for approval (short timeout — the frontend will poll)
-        builder = _registration_builder.wait_for_approval()
+        builder = await _registration_builder.wait_for_approval()
 
         if builder is not None:
             # Approval received — register to derive AppKey
-            sdk = builder.register(_registration_phrase)
+            sdk = await builder.register(_registration_phrase)
             app_key = sdk.app_key()
 
             # Persist the AppKey
@@ -271,9 +272,9 @@ async def registration_check() -> dict:
             logger.debug(f"Sia approval still pending: {e}")
             return {"ok": True, "status": "pending"}
 
-        # Actual error — mark as failed
-        _registration_builder = None
-        _registration_phrase = None
+        # Actual error — don't clear the registration state so the user
+        # can retry clicking "I've approved it" without re-entering the
+        # recovery phrase or re-initiating the whole flow.
         logger.error(f"Sia approval check failed: {e}")
         return {"ok": False, "error": f"Approval check failed: {e}"}
 
@@ -341,7 +342,7 @@ def _save_app_key(app_key: AppKey):
     try:
         key_path = Path(settings.sia_key_path)
         key_path.parent.mkdir(parents=True, exist_ok=True)
-        key_path.write_text(app_key.key.hex())
+        key_path.write_text(bytes(app_key.export()).hex())
         logger.info(f"AppKey saved to {key_path}")
     except Exception as e:
         logger.error(f"Failed to save AppKey: {e}")

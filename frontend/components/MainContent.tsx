@@ -7,7 +7,7 @@ import { useSidebar } from './SidebarContext';
 export default function MainContent({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { collapsed } = useSidebar();
-  const isPublicPage = pathname === '/' || pathname === '/login';
+  const isPublicPage = pathname === '/' || pathname === '/login' || pathname === '/setup' || pathname === '/unauthorized';
 
   return (
     <main
