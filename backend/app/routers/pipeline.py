@@ -15,8 +15,8 @@ import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.database import get_db
-from backend.app.schemas import (
+from app.database import get_db
+from app.schemas import (
     PipelineRequest,
     PipelineResponse,
     TranscribeRequest,
@@ -30,11 +30,11 @@ from backend.app.schemas import (
     SiaStoreRequest,
     SiaStoreResponse,
 )
-from backend.app.services.transcribe import transcribe_job
-from backend.app.services.detect import detect_highlights
-from backend.app.services.extract import extract_clips
-from backend.app.services.render import render_clips
-from backend.app.services.sia import store_job_artifacts
+from app.services.transcribe import transcribe_job
+from app.services.detect import detect_highlights
+from app.services.extract import extract_clips
+from app.services.render import render_clips
+from app.services.sia import store_job_artifacts
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["pipeline"])

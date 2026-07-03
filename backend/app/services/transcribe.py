@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.config import settings
-from backend.app.models import Job, Transcript, PipelineStep
-from backend.app.database import async_session_factory
+from app.config import settings
+from app.models import Job, Transcript, PipelineStep
+from app.database import async_session_factory
 
 
 async def transcribe_job(

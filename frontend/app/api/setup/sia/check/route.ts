@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
-import { registrationCheck, getStatus } from '@/lib/sia/client';
 
 /**
  * POST /api/setup/sia/check
  *
  * Checks if the user has approved the app on the Sia indexer.
+ * Proxies through the backend (which owns the Sia SDK).
  * If approved, updates the database and returns success.
  *
  * Body: { }
- * (Uses the config already stored in DB and the in-memory registration flow)
+ * (Uses the config already stored in DB and the backend's in-memory registration flow)
  *
  * Response: {
  *   ok: boolean,
@@ -31,11 +31,21 @@ export async function POST() {
       );
     }
 
-    // Check approval status
-    const result = await registrationCheck({
-      indexerUrl: settings.siaIndexerUrl,
-      appId: settings.siaAppId,
-    });
+    // Proxy approval check through the backend
+    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    const backendResponse = await fetch(
+      `${backendUrl}/api/sia/register/check`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          indexer_url: settings.siaIndexerUrl,
+          app_id: settings.siaAppId,
+        }),
+      }
+    );
+
+    const result = await backendResponse.json();
 
     // If approved, update the database
     if (result.ok && result.status === 'approved') {

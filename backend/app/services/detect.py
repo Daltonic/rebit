@@ -14,8 +14,8 @@ from typing import Optional
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.config import settings
-from backend.app.models import Job, Segment, Transcript, PipelineStep
+from app.config import settings
+from app.models import Job, Segment, Transcript, PipelineStep
 
 
 # ── Configuration ────────────────────────────────────────────────────────

@@ -13,11 +13,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
-from backend.app.config import settings
-from backend.app.database import init_db, close_db, async_session_factory
-from backend.app.models import AppSettings
-from backend.app.routers import pipeline, sia
-from backend.app.services import sia_client
+from app.config import settings
+from app.database import init_db, close_db, async_session_factory
+from app.models import AppSettings
+from app.routers import pipeline, sia
+from app.services import sia_client
 
 # ── Logging ──────────────────────────────────────────────────────────────
 
@@ -46,11 +46,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Database initialization skipped (may not exist yet): {e}")
 
-    # Log Sia mode
-    if settings.is_demo_mode:
-        logger.info("Sia running in DEMO mode — no actual storage")
-    else:
-        logger.info(f"Sia configured in LIVE mode (indexer: {settings.sia_indexer_url})")
+    # Initialize Sia client from database (startup fast-path)
+    # If a stored AppKey exists on disk, this will connect without user interaction.
+    # Otherwise, it gracefully enters demo mode until the setup wizard is run.
+    try:
+        async with async_session_factory() as db:
+            sia_result = await sia_client.init_sia_from_db(db)
+            if sia_result.get("connected"):
+                logger.info("Sia connected via stored AppKey — fast-path reconnection successful")
+            elif sia_result.get("demo"):
+                logger.info(f"Sia in demo mode: {sia_result.get('reason', 'not configured')}")
+            else:
+                logger.info("Sia not connected — setup wizard required")
+    except Exception as e:
+        logger.warning(f"Sia initialization skipped: {e}")
 
     yield
 
@@ -89,12 +98,13 @@ app.include_router(sia.router)
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    from backend.app.schemas import HealthResponse
+    from app.schemas import HealthResponse
+    sia_status = sia_client.get_status()
     return HealthResponse(
         status="ok",
         version="0.1.0",
-        sia_mode=settings.sia_mode,
-        sia_connected=not settings.is_demo_mode and bool(settings.sia_indexer_url),
+        sia_mode="demo" if sia_status["demo"] else "live",
+        sia_connected=sia_status["connected"],
     )
 
 
@@ -129,7 +139,7 @@ async def sia_events():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "backend.app.main:app",
+        "app.main:app",
         host="0.0.0.0",
         port=8000,
         reload=settings.debug,

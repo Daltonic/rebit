@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
-import { getStatus } from '@/lib/sia/client';
 import { prisma } from '@/lib/prisma/client';
 
 /**
  * GET /api/sia/status
  *
  * Returns the current Sia connection state.
+ * Proxies through the backend (which owns the Sia SDK).
  * Gracefully handles missing app_settings table.
  *
  * Response: {
@@ -27,13 +27,30 @@ export async function GET() {
       // Table doesn't exist yet — return demo mode
     }
 
-    const status = getStatus();
+    // Get status from backend (which owns the Sia SDK)
+    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    let connected = false;
+    let mode: 'live' | 'demo' = 'demo';
+    let reason: string | null = 'Backend unreachable';
+
+    try {
+      const backendResponse = await fetch(`${backendUrl}/api/sia/status`);
+      if (backendResponse.ok) {
+        const data = await backendResponse.json();
+        connected = data.connected;
+        mode = data.mode === 'live' ? 'live' : 'demo';
+        reason = data.reason || null;
+        indexerUrl = data.indexer_url || indexerUrl;
+      }
+    } catch {
+      // Backend unreachable — return demo mode
+    }
 
     return NextResponse.json({
-      connected: status.connected,
-      mode: status.demoMode ? ('demo' as const) : ('live' as const),
-      reason: status.reason,
-      indexerUrl: indexerUrl || status.indexerUrl || null,
+      connected,
+      mode,
+      reason,
+      indexerUrl,
     });
   } catch (err) {
     console.error('Error fetching Sia status:', err);

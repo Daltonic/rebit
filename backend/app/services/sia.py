@@ -19,9 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sia_storage import PinnedObject
 
-from backend.app.config import settings
-from backend.app.models import Job, Segment, Transcript, SiaLog, PipelineStep
-from backend.app.services import sia_client
+from app.config import settings
+from app.models import Job, Segment, Transcript, SiaLog, PipelineStep
+from app.services import sia_client
 
 logger = logging.getLogger(__name__)
 

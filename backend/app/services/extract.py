@@ -12,8 +12,8 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.config import settings
-from backend.app.models import Job, Segment, PipelineStep
+from app.config import settings
+from app.models import Job, Segment, PipelineStep
 
 
 async def extract_clips(

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
-import { registrationStart, initSiaClient, getStatus } from '@/lib/sia/client';
 
 /**
  * GET /api/setup/sia
@@ -42,7 +41,10 @@ export async function GET() {
 /**
  * POST /api/setup/sia
  *
- * Saves Sia configuration to the database and starts the registration flow.
+ * Saves Sia configuration to the database and proxies the registration
+ * request to the backend (which owns the Sia SDK).
+ *
+ * The frontend NEVER talks to the Sia SDK or Sia indexer directly.
  *
  * Body: {
  *   siaIndexerUrl: string,
@@ -124,17 +126,23 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Initialize the Sia client with the new config
-    await initSiaClient(
-      siaIndexerUrl,
-      siaAppId,
-      siaAppName || 'ReBit',
-      siaAppDescription || ''
-    );
+    // Check if backend is already connected (stored AppKey fast-path)
+    // by querying the backend's /api/sia/status
+    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    let alreadyConnected = false;
+    try {
+      const statusRes = await fetch(`${backendUrl}/api/sia/status`);
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        if (statusData.connected) {
+          alreadyConnected = true;
+        }
+      }
+    } catch {
+      // Backend unreachable — will fall through to registration
+    }
 
-    // Check if already connected (e.g., stored key was valid)
-    const status = getStatus();
-    if (status.connected) {
+    if (alreadyConnected) {
       // Already connected — update DB and return success
       await prisma.appSettings.update({
         where: { id: 'default' },
@@ -147,14 +155,24 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Start registration flow
-    const result = await registrationStart(recoveryPhrase, {
-      indexerUrl: siaIndexerUrl,
-      appId: siaAppId,
-      appName: siaAppName || 'ReBit',
-      appDescription: siaAppDescription || '',
-    });
+    // Start registration via backend proxy
+    // The backend owns the Sia SDK — the frontend never calls it directly
+    const backendResponse = await fetch(
+      `${backendUrl}/api/sia/register/init`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          indexer_url: siaIndexerUrl,
+          app_id: siaAppId,
+          app_name: siaAppName || 'ReBit',
+          app_description: siaAppDescription || '',
+          recovery_phrase: recoveryPhrase,
+        }),
+      }
+    );
 
+    const result = await backendResponse.json();
     return NextResponse.json(result, { status: result.ok ? 200 : 400 });
   } catch (err) {
     console.error('Error in Sia setup:', err);

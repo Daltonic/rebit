@@ -11,12 +11,16 @@ Architecture:
     1. Fast path: stored AppKey on disk → SDK.connected(app_key)
     2. Registration path: setup wizard → Builder → register(phrase) → SDK
   - Recovery phrase is NEVER stored — only the derived AppKey is persisted.
+  - Config is read from the database (AppSettings), not from env vars.
 """
 
 import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from sia_storage import (
     AppKey,
@@ -28,7 +32,8 @@ from sia_storage import (
     validate_recovery_phrase,
 )
 
-from backend.app.config import settings
+from app.config import settings
+from app.models import AppSettings
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +117,42 @@ async def init_sia_client(
         return {"connected": False, "demo": True, "reason": _demo_reason}
 
 
+async def init_sia_from_db(db: AsyncSession) -> dict:
+    """
+    Initialize Sia client using settings from the database.
+
+    Called on backend startup (lifespan) to attempt the fast-path
+    reconnection using a previously stored AppKey. If no config exists
+    in the DB, enters demo mode gracefully.
+
+    This is the startup fast-path: registration (needs recovery phrase +
+    human approval) happens once; reconnection (needs only the derived
+    key) happens automatically on every subsequent boot.
+    """
+    try:
+        result = await db.execute(
+            select(AppSettings).where(AppSettings.id == "default")
+        )
+        app_settings = result.scalar_one_or_none()
+    except Exception:
+        # Table may not exist yet
+        logger.info("AppSettings table not available — entering demo mode")
+        _set_demo_mode("Database not initialized yet")
+        return {"connected": False, "demo": True, "reason": "Database not initialized"}
+
+    if not app_settings or not app_settings.sia_indexer_url or not app_settings.sia_app_id:
+        logger.info("No Sia config in database — entering demo mode")
+        _set_demo_mode("Sia not configured — use the setup wizard")
+        return {"connected": False, "demo": True, "reason": "Sia not configured"}
+
+    return await init_sia_client(
+        indexer_url=app_settings.sia_indexer_url,
+        app_id_hex=app_settings.sia_app_id,
+        app_name=app_settings.sia_app_name or "ReBit",
+        app_description=app_settings.sia_app_description or "",
+    )
+
+
 async def registration_start(
     indexer_url: str,
     app_id_hex: str,
@@ -129,6 +170,17 @@ async def registration_start(
     The recovery phrase is held in memory ONLY during this flow.
     """
     global _registration_builder, _registration_phrase
+
+    # Idempotency guard: if already pending, return existing URL
+    if _registration_builder is not None and _registration_phrase is not None:
+        try:
+            existing_url = _registration_builder.response_url()
+            if existing_url:
+                logger.info("Returning existing pending approval URL")
+                return {"ok": True, "approval_url": existing_url}
+        except Exception:
+            # Builder state may be stale — fall through to re-create
+            pass
 
     # Validate BIP-39 phrase
     try:
@@ -213,8 +265,17 @@ async def registration_check() -> dict:
         return {"ok": True, "status": "pending"}
 
     except Exception as e:
-        logger.warning(f"Sia approval check failed (will retry): {e}")
-        return {"ok": True, "status": "pending"}
+        error_str = str(e).lower()
+        # If the exception indicates "wait"/"timeout"/"pending", it's still pending
+        if any(word in error_str for word in ["wait", "timeout", "pending"]):
+            logger.debug(f"Sia approval still pending: {e}")
+            return {"ok": True, "status": "pending"}
+
+        # Actual error — mark as failed
+        _registration_builder = None
+        _registration_phrase = None
+        logger.error(f"Sia approval check failed: {e}")
+        return {"ok": False, "error": f"Approval check failed: {e}"}
 
 
 def reset_registration():
@@ -247,6 +308,16 @@ def get_status() -> dict:
 def is_ready() -> bool:
     """Check if Sia SDK is ready for uploads."""
     return _sdk is not None and not _demo_mode
+
+
+# ── Internal Helpers ─────────────────────────────────────────────────────
+
+def _set_demo_mode(reason: str):
+    """Set demo mode with a reason."""
+    global _sdk, _demo_mode, _demo_reason
+    _sdk = None
+    _demo_mode = True
+    _demo_reason = reason
 
 
 # ── Key Persistence ──────────────────────────────────────────────────────

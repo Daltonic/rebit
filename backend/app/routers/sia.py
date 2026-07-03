@@ -11,17 +11,17 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.config import settings
-from backend.app.database import get_db
-from backend.app.models import AppSettings
-from backend.app.schemas import (
+from app.config import settings
+from app.database import get_db, get_db_optional
+from app.models import AppSettings
+from app.schemas import (
     SiaRegisterInitRequest,
     SiaRegisterInitResponse,
     SiaRegisterCheckRequest,
     SiaRegisterCheckResponse,
     SiaStatusResponse,
 )
-from backend.app.services import sia_client
+from app.services import sia_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sia", tags=["sia"])
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/api/sia", tags=["sia"])
 
 @router.get("/status", response_model=SiaStatusResponse)
 async def get_sia_status(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession | None = Depends(get_db_optional),
 ):
     """
     GET /api/sia/status
@@ -40,12 +40,17 @@ async def get_sia_status(
     # Get SDK status
     status = sia_client.get_status()
 
-    # Check DB settings for indexer URL
-    result = await db.execute(
-        select(AppSettings).where(AppSettings.id == "default")
-    )
-    app_settings = result.scalar_one_or_none()
-    indexer_url = app_settings.sia_indexer_url if app_settings else None
+    # Check DB settings for indexer URL (if DB is available)
+    indexer_url = None
+    if db is not None:
+        try:
+            result = await db.execute(
+                select(AppSettings).where(AppSettings.id == "default")
+            )
+            app_settings = result.scalar_one_or_none()
+            indexer_url = app_settings.sia_indexer_url if app_settings else None
+        except Exception:
+            indexer_url = None
 
     return SiaStatusResponse(
         connected=status["connected"],
@@ -102,11 +107,8 @@ async def register_check(
 
     if result.get("ok") and result.get("status") == "approved":
         # Update DB to mark Sia as connected
-        from backend.app.database import async_session_factory
+        from app.database import async_session_factory
         async with async_session_factory() as db:
-            await db.execute(
-                select(AppSettings).where(AppSettings.id == "default")
-            )
             settings_row = (await db.execute(
                 select(AppSettings).where(AppSettings.id == "default")
             )).scalar_one_or_none()
@@ -123,3 +125,14 @@ async def register_check(
         )
 
     return SiaRegisterCheckResponse(ok=True, status="pending")
+
+
+@router.post("/disconnect")
+async def disconnect_sia():
+    """
+    POST /api/sia/disconnect
+
+    Disconnect from Sia and remove the persisted AppKey from disk.
+    """
+    await sia_client.disconnect()
+    return {"ok": True}
