@@ -1,0 +1,156 @@
+"""
+Clip extraction service.
+
+Uses ffmpeg to extract video segments based on detected highlights.
+Creates vertical (9:16) short-form clips from the original video.
+"""
+
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.app.config import settings
+from backend.app.models import Job, Segment, PipelineStep
+
+
+async def extract_clips(
+    job_id: str,
+    db: AsyncSession,
+) -> dict:
+    """
+    Extract video clips for approved/pending segments.
+    
+    1. Fetches segments for the job
+    2. Uses ffmpeg to cut clips from the source video
+    3. Saves clip paths to segment records
+    """
+    # Fetch job
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        return {"passed": False, "message": f"Job {job_id} not found"}
+
+    # Fetch segments
+    segments_result = await db.execute(
+        select(Segment).where(
+            Segment.job_id == job_id,
+            Segment.status.in_(["pending", "approved"]),
+        ).order_by(Segment.start_seconds)
+    )
+    segments = segments_result.scalars().all()
+
+    if not segments:
+        return {"passed": False, "message": "No segments to extract"}
+
+    await _update_step(db, job_id, "extract", "running", 10, f"Extracting {len(segments)} clips...")
+
+    # Locate source video
+    video_path = settings.upload_path / f"{job_id}.mp4"
+    if not video_path.exists():
+        video_path = settings.upload_path / job.source_filename
+    if not video_path.exists():
+        return {"passed": False, "message": f"Source video not found for job {job_id}"}
+
+    clips_dir = settings.output_path / job_id / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+
+    clips_rendered = 0
+
+    try:
+        for i, segment in enumerate(segments):
+            progress = 10 + int((i / len(segments)) * 80)
+            await _update_step(
+                db, job_id, "extract", "running", progress,
+                f"Extracting clip {i + 1}/{len(segments)}..."
+            )
+
+            clip_filename = f"clip_{i + 1:03d}.mp4"
+            clip_path = clips_dir / clip_filename
+
+            # Calculate duration
+            duration = segment.end_seconds - segment.start_seconds
+            if duration < 3:
+                duration = 3  # Minimum 3 seconds
+            if duration > 60:
+                duration = 60  # Maximum 60 seconds
+
+            # Extract clip using ffmpeg
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-ss", str(segment.start_seconds),
+                "-i", str(video_path),
+                "-t", str(duration),
+                "-c:v", "libx264",
+                "-c:a", "aac",
+                "-preset", "fast",
+                "-crf", "22",
+                "-y",
+                str(clip_path),
+            ]
+
+            subprocess.run(ffmpeg_cmd, capture_output=True, timeout=120)
+
+            if clip_path.exists():
+                segment.clip_path = str(clip_path)
+                clips_rendered += 1
+
+        await _update_step(
+            db, job_id, "extract", "complete", 100,
+            f"Extracted {clips_rendered}/{len(segments)} clips"
+        )
+
+        # Update job status
+        job.status = "extracting"
+
+        return {
+            "passed": True,
+            "message": f"Extracted {clips_rendered} clips",
+            "clips_rendered": clips_rendered,
+        }
+
+    except subprocess.TimeoutExpired:
+        await _update_step(db, job_id, "extract", "failed", 0, "Clip extraction timed out")
+        return {"passed": False, "message": "Clip extraction timed out"}
+    except Exception as e:
+        await _update_step(db, job_id, "extract", "failed", 0, f"Extraction failed: {str(e)}")
+        return {"passed": False, "message": f"Clip extraction failed: {str(e)}"}
+
+
+async def _update_step(
+    db: AsyncSession,
+    job_id: str,
+    stage: str,
+    status: str,
+    progress_pct: int,
+    message: str,
+):
+    """Create or update a pipeline step record."""
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(PipelineStep).where(
+            PipelineStep.job_id == job_id,
+            PipelineStep.stage == stage,
+        )
+    )
+    step = result.scalar_one_or_none()
+
+    if step:
+        step.status = status
+        step.progress_pct = progress_pct
+        step.message = message
+        if status == "running" and not step.started_at:
+            step.started_at = now
+        if status in ("complete", "failed"):
+            step.completed_at = now
+    else:
+        db.add(PipelineStep(
+            job_id=job_id,
+            stage=stage,
+            status=status,
+            progress_pct=progress_pct,
+            message=message,
+            started_at=now if status == "running" else None,
+        ))

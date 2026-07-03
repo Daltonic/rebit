@@ -1,0 +1,124 @@
+# ReBit — Docker Compose
+# Orchestrates the full stack: frontend, backend, database, Inngest, Ollama
+
+services:
+  # ── PostgreSQL Database ──────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: rebit-postgres
+    environment:
+      POSTGRES_USER: rebit
+      POSTGRES_PASSWORD: rebit
+      POSTGRES_DB: rebit
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rebit"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Inngest Job Queue ───────────────────────────────────────────────
+  inngest:
+    image: inngest/inngest:latest
+    container_name: rebit-inngest
+    ports:
+      - "8288:8288"
+    environment:
+      INNGEST_SIGNING_KEY: "${INNGEST_SIGNING_KEY:-rebit-dev-key}"
+      INNGEST_EVENT_API: http://inngest:8288
+    command: >
+      inngest dev --no-discovery
+      --sdk-url http://frontend:3000/api/inngest
+      --sdk-url http://backend:8000/api/inngest
+
+  # ── Ollama (Embedding Model) ────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rebit-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ollama-setup:
+    image: ollama/ollama:latest
+    container_name: rebit-ollama-setup
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ollama_data:/root/.ollama
+    entrypoint: >
+      sh -c "sleep 5 && ollama pull nomic-embed-text"
+    restart: "no"
+
+  # ── Backend (Python FastAPI) ───────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rebit-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://rebit:rebit@postgres:5432/rebit"
+      SIA_MODE: "${SIA_MODE:-auto}"
+      SIA_KEY_PATH: "/app/data/sia/appkey.hex"
+      SIA_INDEXER_URL: "${SIA_INDEXER_URL:-}"
+      OPENROUTER_KEY: "${OPENROUTER_KEY:-}"
+      CORS_ORIGINS: "http://localhost:3000"
+      DEBUG: "${DEBUG:-false}"
+    volumes:
+      - task_uploads:/tmp/rebit/uploads
+      - task_output:/tmp/rebit/output
+      - sia_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Frontend (Next.js) ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rebit-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "postgresql://rebit:rebit@postgres:5432/rebit"
+      AUTH_SECRET: "${AUTH_SECRET:-rebit-dev-secret-change-in-production}"
+      AUTH_URL: "http://localhost:3000"
+      BACKEND_URL: "http://backend:8000"
+      SIA_MODE: "${SIA_MODE:-auto}"
+      SIA_KEY_PATH: "/app/data/sia/appkey.hex"
+      SIA_INDEXER_URL: "${SIA_INDEXER_URL:-}"
+    volumes:
+      - task_uploads:/tmp/rebit/uploads
+      - sia_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  task_uploads:
+    driver: local
+  task_output:
+    driver: local
+  ollama_data:
+    driver: local
+  sia_data:
+    driver: local
