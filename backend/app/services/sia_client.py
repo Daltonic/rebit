@@ -96,7 +96,27 @@ async def init_sia_client(
         app_key = _load_app_key()
         if app_key is not None:
             try:
-                sdk = SDK.connected(app_key)
+                # Build AppMetadata for the Builder
+                try:
+                    app_id_bytes = bytes.fromhex(app_id_hex)
+                except ValueError:
+                    app_id_bytes = b'\x00' * 32
+
+                if len(app_id_bytes) != 32:
+                    app_id_bytes = b'\x00' * 32
+
+                metadata = AppMetadata(
+                    id=app_id_bytes,
+                    name=app_name,
+                    description=app_description,
+                    service_url="http://localhost:3000",
+                    logo_url=None,
+                    callback_url=None,
+                )
+
+                # Use Builder.connected (async instance method) to reconnect with stored AppKey
+                builder = Builder(indexer_url, metadata)
+                sdk = await builder.connected(app_key)
                 # Verify by checking account
                 account = sdk.account()
                 _sdk = sdk

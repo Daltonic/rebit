@@ -1,10 +1,9 @@
 'use client';
 import { useState } from 'react';
 import Link from 'next/link';
-import { Plus, Search, Filter } from 'lucide-react';
+import { Plus, Search } from 'lucide-react';
 import { mockJobs } from '@/lib/mock/data';
 import ProjectCard from '@/components/ProjectCard';
-import SiaStatus from '@/components/SiaStatus';
 import { JobStatus } from '@/lib/types';
 
 const FILTERS: { label: string; value: JobStatus | 'all' }[] = [
@@ -36,7 +35,6 @@ export default function ProjectsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <SiaStatus />
           <Link href="/upload"
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-all"
             style={{ background: 'var(--accent)', color: 'white', boxShadow: '0 0 16px var(--accent-glow)' }}>
