@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
+import { invalidateSetupCache } from '@/proxy';
 
 /**
  * GET /api/setup/sia
@@ -148,6 +149,11 @@ export async function POST(request: NextRequest) {
         where: { id: 'default' },
         data: { siaConnected: true },
       });
+
+      // Invalidate the proxy middleware cache so subsequent requests
+      // pick up the new setup status immediately.
+      invalidateSetupCache();
+
       return NextResponse.json({
         ok: true,
         already_connected: true,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
 import type { SetupStatus } from '@/lib/types';
+import { invalidateSetupCache } from '@/proxy';
 
 /**
  * GET /api/setup/status
@@ -21,33 +22,39 @@ export async function GET() {
       // Table doesn't exist yet — return default unconfigured state
     }
 
-    if (!settings) {
-      return NextResponse.json({
-        setupComplete: false,
-        siaConnected: false,
-        siaIndexerUrl: null,
-        siaAppId: null,
-        siaAppName: null,
-        siaAppDescription: null,
-        hasOpenrouterKey: false,
-        hasGoogle: false,
-        hasGitHub: false,
-        hasWebauthn: false,
-      } satisfies SetupStatus);
-    }
+    const body = !settings
+      ? ({
+          setupComplete: false,
+          siaConnected: false,
+          siaIndexerUrl: null,
+          siaAppId: null,
+          siaAppName: null,
+          siaAppDescription: null,
+          hasOpenrouterKey: false,
+          hasGoogle: false,
+          hasGitHub: false,
+          hasWebauthn: false,
+        } satisfies SetupStatus)
+      : ({
+          setupComplete: settings.setupComplete,
+          siaConnected: settings.siaConnected,
+          siaIndexerUrl: settings.siaIndexerUrl,
+          siaAppId: settings.siaAppId,
+          siaAppName: settings.siaAppName,
+          siaAppDescription: settings.siaAppDescription,
+          hasOpenrouterKey: !!settings.openrouterKey,
+          hasGoogle: !!(settings.googleClientId && settings.googleClientSecret),
+          hasGitHub: !!(settings.githubClientId && settings.githubClientSecret),
+          hasWebauthn: !!(settings.webauthnRpId && settings.webauthnOrigin),
+        } satisfies SetupStatus);
 
-    return NextResponse.json({
-      setupComplete: settings.setupComplete,
-      siaConnected: settings.siaConnected,
-      siaIndexerUrl: settings.siaIndexerUrl,
-      siaAppId: settings.siaAppId,
-      siaAppName: settings.siaAppName,
-      siaAppDescription: settings.siaAppDescription,
-      hasOpenrouterKey: !!settings.openrouterKey,
-      hasGoogle: !!(settings.googleClientId && settings.googleClientSecret),
-      hasGitHub: !!(settings.githubClientId && settings.githubClientSecret),
-      hasWebauthn: !!(settings.webauthnRpId && settings.webauthnOrigin),
-    } satisfies SetupStatus);
+    return NextResponse.json(body, {
+      headers: {
+        // Prevent aggressive client-side caching — the proxy middleware
+        // handles its own caching internally.
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+      },
+    });
   } catch (err) {
     console.error('Error fetching setup status:', err);
     return NextResponse.json(
@@ -83,6 +90,10 @@ export async function POST(request: NextRequest) {
         setupComplete,
       },
     });
+
+    // Invalidate the proxy middleware cache so subsequent requests
+    // pick up the new setup status immediately.
+    invalidateSetupCache();
 
     return NextResponse.json({ ok: true });
   } catch (err) {

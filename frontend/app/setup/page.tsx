@@ -408,9 +408,9 @@ export default function SetupPage() {
                   }}
                   title={
                     isDone
-                      ? `${STEP_LABELS[s]} \u2014 completed (click to re-do)`
+                      ? `${STEP_LABELS[s]} completed (click to re-do)`
                       : isActive
-                        ? `${STEP_LABELS[s]} \u2014 current step`
+                        ? `${STEP_LABELS[s]} current step`
                         : STEP_LABELS[s]
                   }
                 >
@@ -590,7 +590,7 @@ export default function SetupPage() {
                     <label className="block text-sm font-medium mb-1">
                       BIP-39 Recovery Phrase
                       <span className="text-xs opacity-50 ml-2">
-                        (12 or 24 words \u2014 never stored)
+                        (12 or 24 words never stored)
                       </span>
                     </label>
                     <textarea
@@ -644,7 +644,7 @@ export default function SetupPage() {
                       className="text-sm font-semibold"
                       style={{ color: 'var(--success)' }}
                     >
-                      Configuration saved \u2014 approval required
+                      Configuration saved approval required
                     </span>
                   </div>
                   <p className="text-sm" style={{ color: 'var(--subtle)' }}>
@@ -775,7 +775,7 @@ export default function SetupPage() {
                 <p className="text-sm opacity-60">
                   {state.provConfirmed
                     ? 'Providers have been configured. You can update them below.'
-                    : 'Configure at least one OAuth provider so users can sign in. All fields are optional \u2014 you can skip this step and configure later.'}
+                    : 'Configure at least one OAuth provider so users can sign in. All fields are optional you can skip this step and configure later.'}
                 </p>
               </div>
 

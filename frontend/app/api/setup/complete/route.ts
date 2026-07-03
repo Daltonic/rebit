@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
+import { invalidateSetupCache } from '@/proxy';
 
 /**
  * POST /api/setup/complete
@@ -21,6 +22,10 @@ export async function POST() {
         setupComplete: true,
       },
     });
+
+    // Invalidate the proxy middleware cache so subsequent requests
+    // pick up the new setup status immediately.
+    invalidateSetupCache();
 
     return NextResponse.json({ ok: true });
   } catch (err) {

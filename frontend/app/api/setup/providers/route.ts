@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
+import { invalidateSetupCache } from '@/proxy';
 
 /**
  * GET /api/setup/providers
@@ -84,6 +85,10 @@ export async function POST(request: NextRequest) {
         webauthnOrigin: webauthnOrigin || null,
       },
     });
+
+    // Invalidate the proxy middleware cache so subsequent requests
+    // pick up the new provider status immediately.
+    invalidateSetupCache();
 
     return NextResponse.json({ ok: true });
   } catch (err) {

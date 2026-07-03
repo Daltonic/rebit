@@ -259,8 +259,17 @@ async def registration_check() -> dict:
         return {"ok": False, "error": "No pending registration flow"}
 
     try:
-        # Wait for approval (short timeout — the frontend will poll)
-        builder = await _registration_builder.wait_for_approval()
+        # Wait for approval with a very short timeout — the frontend
+        # polls repeatedly, so we just need to check and return quickly.
+        # A long blocking wait causes Turbopack's async hooks tracking
+        # Map to overflow (RangeError: Map maximum size exceeded).
+        try:
+            builder = await asyncio.wait_for(
+                _registration_builder.wait_for_approval(),
+                timeout=1.0,  # 1 second max — frontend will retry
+            )
+        except asyncio.TimeoutError:
+            return {"ok": True, "status": "pending"}
 
         if builder is not None:
             # Approval received — register to derive AppKey
