@@ -66,8 +66,8 @@ export async function generatePasskeyRegistrationOptions(
     rpName: RP_NAME,
     rpID: RP_ID,
     userID: userId,
-    userName,
-    userDisplayName: userEmail,
+    userName: userEmail,
+    userDisplayName: userName,
     attestationType: 'none',
     excludeCredentials: existingPasskeys.map((pk) => ({
       id: base64URLStringToBuffer(pk.credentialId),
