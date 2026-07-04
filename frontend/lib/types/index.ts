@@ -1,5 +1,6 @@
 export type JobStatus =
   | 'uploading'
+  | 'uploaded'
   | 'transcribing'
   | 'detecting'
   | 'extracting'
@@ -16,7 +17,7 @@ export type HookStrength = 'Weak' | 'Moderate' | 'Strong';
 export interface PipelineStep {
   id: string;
   jobId: string;
-  stage: 'upload' | 'transcribe' | 'detect' | 'extract' | 'render' | 'store';
+  stage: 'sia_upload' | 'transcribe' | 'detect' | 'extract' | 'render' | 'sia_store';
   status: StageStatus;
   progressPct: number;
   message: string;

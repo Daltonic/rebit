@@ -3,12 +3,12 @@ import { PipelineStep, StageStatus } from '@/lib/types';
 import { Check, X, Loader2, Clock, Mic, Brain, Scissors, Film, Database, Upload } from 'lucide-react';
 
 const STAGES: { key: PipelineStep['stage']; label: string; icon: React.ElementType }[] = [
-  { key: 'upload', label: 'Upload', icon: Upload },
+  { key: 'sia_upload', label: 'Sia Upload', icon: Upload },
   { key: 'transcribe', label: 'Transcribe', icon: Mic },
   { key: 'detect', label: 'Detect Highlights', icon: Brain },
   { key: 'extract', label: 'Extract Clips', icon: Scissors },
   { key: 'render', label: 'Render 9:16', icon: Film },
-  { key: 'store', label: 'Store on Sia', icon: Database },
+  { key: 'sia_store', label: 'Store on Sia', icon: Database },
 ];
 
 function StatusIcon({ status }: { status: StageStatus }) {

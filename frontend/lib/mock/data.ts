@@ -29,12 +29,12 @@ export const mockJobs: Job[] = [
     updatedAt: new Date(Date.now() - 3600000 * 1).toISOString(),
     _count: { segments: 7 },
     pipelineSteps: [
-      { id: 's1', jobId: 'job_01jx4k2m', stage: 'upload', status: 'complete', progressPct: 100, message: 'Uploaded 847 MB', startedAt: new Date(Date.now() - 7200000).toISOString(), completedAt: new Date(Date.now() - 6900000).toISOString() },
+      { id: 's1', jobId: 'job_01jx4k2m', stage: 'sia_upload', status: 'complete', progressPct: 100, message: 'Uploaded 847 MB to Sia', startedAt: new Date(Date.now() - 7200000).toISOString(), completedAt: new Date(Date.now() - 6900000).toISOString() },
       { id: 's2', jobId: 'job_01jx4k2m', stage: 'transcribe', status: 'complete', progressPct: 100, message: 'Transcript generated — 3,847 words', startedAt: new Date(Date.now() - 6900000).toISOString(), completedAt: new Date(Date.now() - 5400000).toISOString() },
       { id: 's3', jobId: 'job_01jx4k2m', stage: 'detect', status: 'complete', progressPct: 100, message: '7 highlights detected', startedAt: new Date(Date.now() - 5400000).toISOString(), completedAt: new Date(Date.now() - 4800000).toISOString() },
       { id: 's4', jobId: 'job_01jx4k2m', stage: 'extract', status: 'complete', progressPct: 100, message: '7 clips extracted', startedAt: new Date(Date.now() - 4800000).toISOString(), completedAt: new Date(Date.now() - 4200000).toISOString() },
       { id: 's5', jobId: 'job_01jx4k2m', stage: 'render', status: 'complete', progressPct: 100, message: '7 clips rendered to 9:16', startedAt: new Date(Date.now() - 4200000).toISOString(), completedAt: new Date(Date.now() - 3800000).toISOString() },
-      { id: 's6', jobId: 'job_01jx4k2m', stage: 'store', status: 'complete', progressPct: 100, message: 'All outputs pinned to Sia', startedAt: new Date(Date.now() - 3800000).toISOString(), completedAt: new Date(Date.now() - 3600000).toISOString() },
+      { id: 's6', jobId: 'job_01jx4k2m', stage: 'sia_store', status: 'complete', progressPct: 100, message: 'All outputs pinned to Sia', startedAt: new Date(Date.now() - 3800000).toISOString(), completedAt: new Date(Date.now() - 3600000).toISOString() },
     ],
     segments: [
       {
@@ -88,12 +88,12 @@ export const mockJobs: Job[] = [
     updatedAt: new Date(Date.now() - 300000).toISOString(),
     _count: { segments: 0 },
     pipelineSteps: [
-      { id: 's7', jobId: 'job_02ab9n1p', stage: 'upload', status: 'complete', progressPct: 100, message: 'Uploaded 1.2 GB', startedAt: new Date(Date.now() - 1800000).toISOString(), completedAt: new Date(Date.now() - 1500000).toISOString() },
+      { id: 's7', jobId: 'job_02ab9n1p', stage: 'sia_upload', status: 'complete', progressPct: 100, message: 'Uploaded 1.2 GB to Sia', startedAt: new Date(Date.now() - 1800000).toISOString(), completedAt: new Date(Date.now() - 1500000).toISOString() },
       { id: 's8', jobId: 'job_02ab9n1p', stage: 'transcribe', status: 'running', progressPct: 64, message: 'Transcribing… 64% complete', startedAt: new Date(Date.now() - 1500000).toISOString(), completedAt: null },
       { id: 's9', jobId: 'job_02ab9n1p', stage: 'detect', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
       { id: 's10', jobId: 'job_02ab9n1p', stage: 'extract', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
       { id: 's11', jobId: 'job_02ab9n1p', stage: 'render', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
-      { id: 's12', jobId: 'job_02ab9n1p', stage: 'store', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
+      { id: 's12', jobId: 'job_02ab9n1p', stage: 'sia_store', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
     ],
   },
   {
@@ -110,12 +110,12 @@ export const mockJobs: Job[] = [
     updatedAt: new Date(Date.now() - 82800000).toISOString(),
     _count: { segments: 0 },
     pipelineSteps: [
-      { id: 's13', jobId: 'job_03cd5r7q', stage: 'upload', status: 'complete', progressPct: 100, message: 'Uploaded 2.1 GB', startedAt: new Date(Date.now() - 86400000).toISOString(), completedAt: new Date(Date.now() - 85800000).toISOString() },
+      { id: 's13', jobId: 'job_03cd5r7q', stage: 'sia_upload', status: 'complete', progressPct: 100, message: 'Uploaded 2.1 GB to Sia', startedAt: new Date(Date.now() - 86400000).toISOString(), completedAt: new Date(Date.now() - 85800000).toISOString() },
       { id: 's14', jobId: 'job_03cd5r7q', stage: 'transcribe', status: 'failed', progressPct: 0, message: 'Whisper error: audio codec not supported. Try re-encoding to AAC.', startedAt: new Date(Date.now() - 85800000).toISOString(), completedAt: new Date(Date.now() - 85600000).toISOString() },
       { id: 's15', jobId: 'job_03cd5r7q', stage: 'detect', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
       { id: 's16', jobId: 'job_03cd5r7q', stage: 'extract', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
       { id: 's17', jobId: 'job_03cd5r7q', stage: 'render', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
-      { id: 's18', jobId: 'job_03cd5r7q', stage: 'store', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
+      { id: 's18', jobId: 'job_03cd5r7q', stage: 'sia_store', status: 'pending', progressPct: 0, message: '', startedAt: null, completedAt: null },
     ],
   },
 ];

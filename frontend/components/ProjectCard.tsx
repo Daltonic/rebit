@@ -7,6 +7,7 @@ import { ArrowRight, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, Video } f
 function statusConfig(s: JobStatus) {
   const configs = {
     uploading:    { label: 'Uploading',     color: 'var(--info)',     bg: 'rgba(59,130,246,0.1)',   icon: Loader2, spin: true },
+    uploaded:     { label: 'Uploaded',      color: 'var(--info)',     bg: 'rgba(59,130,246,0.1)',   icon: Loader2, spin: true },
     transcribing: { label: 'Transcribing',  color: 'var(--info)',     bg: 'rgba(59,130,246,0.1)',   icon: Loader2, spin: true },
     detecting:    { label: 'Detecting',     color: 'var(--accent-bright)', bg: 'rgba(139,92,246,0.1)', icon: Loader2, spin: true },
     extracting:   { label: 'Extracting',    color: 'var(--accent-bright)', bg: 'rgba(139,92,246,0.1)', icon: Loader2, spin: true },
