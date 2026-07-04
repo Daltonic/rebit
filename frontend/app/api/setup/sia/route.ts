@@ -71,6 +71,7 @@ export async function POST(request: NextRequest) {
       siaAppName,
       siaAppDescription,
       recoveryPhrase,
+      reconnect,
     } = body;
 
     // Validate required fields
@@ -107,29 +108,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Save config to database (mark siaConnected = false until registration completes)
-    await prisma.appSettings.upsert({
-      where: { id: 'default' },
-      update: {
-        siaIndexerUrl,
-        siaAppId,
-        siaAppName: siaAppName || 'ReBit',
-        siaAppDescription: siaAppDescription || '',
-        siaConnected: false,
-      },
-      create: {
-        id: 'default',
-        siaIndexerUrl,
-        siaAppId,
-        siaAppName: siaAppName || 'ReBit',
-        siaAppDescription: siaAppDescription || '',
-        siaConnected: false,
-      },
-    });
+    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+
+    // When reconnecting from the settings page, first disconnect the backend
+    // so a fresh registration + approval flow can begin. Do NOT write to the
+    // database until approval is confirmed (test of authenticity).
+    if (reconnect) {
+      try {
+        await fetch(`${backendUrl}/api/sia/disconnect`, { method: 'POST' });
+      } catch {
+        // Best-effort — backend may be unreachable
+      }
+    } else {
+      // Save config to database (mark siaConnected = false until registration completes)
+      await prisma.appSettings.upsert({
+        where: { id: 'default' },
+        update: {
+          siaIndexerUrl,
+          siaAppId,
+          siaAppName: siaAppName || 'ReBit',
+          siaAppDescription: siaAppDescription || '',
+          siaConnected: false,
+        },
+        create: {
+          id: 'default',
+          siaIndexerUrl,
+          siaAppId,
+          siaAppName: siaAppName || 'ReBit',
+          siaAppDescription: siaAppDescription || '',
+          siaConnected: false,
+        },
+      });
+    }
 
     // Check if backend is already connected (stored AppKey fast-path)
     // by querying the backend's /api/sia/status
-    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
     let alreadyConnected = false;
     try {
       const statusRes = await fetch(`${backendUrl}/api/sia/status`);
@@ -144,15 +157,17 @@ export async function POST(request: NextRequest) {
     }
 
     if (alreadyConnected) {
-      // Already connected — update DB and return success
-      await prisma.appSettings.update({
-        where: { id: 'default' },
-        data: { siaConnected: true },
-      });
+      if (!reconnect) {
+        // Already connected — update DB and return success
+        await prisma.appSettings.update({
+          where: { id: 'default' },
+          data: { siaConnected: true },
+        });
 
-      // Invalidate the proxy middleware cache so subsequent requests
-      // pick up the new setup status immediately.
-      invalidateSetupCache();
+        // Invalidate the proxy middleware cache so subsequent requests
+        // pick up the new setup status immediately.
+        invalidateSetupCache();
+      }
 
       return NextResponse.json({
         ok: true,
