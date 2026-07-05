@@ -205,7 +205,7 @@ export default function SetupPage() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, []);
 
   // ── Navigation ─────────────────────────────────────────────────────
 
