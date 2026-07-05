@@ -6,6 +6,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: rebit-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: rebit
       POSTGRES_PASSWORD: rebit
@@ -24,6 +25,7 @@ services:
   inngest:
     image: inngest/inngest:latest
     container_name: rebit-inngest
+    restart: unless-stopped
     ports:
       - "8288:8288"
     environment:
@@ -38,6 +40,7 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: rebit-ollama
+    restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
@@ -51,6 +54,7 @@ services:
   ollama-setup:
     image: ollama/ollama:latest
     container_name: rebit-ollama-setup
+    restart: "no"
     depends_on:
       ollama:
         condition: service_healthy
@@ -58,7 +62,6 @@ services:
       - ollama_data:/root/.ollama
     entrypoint: >
       sh -c "sleep 5 && ollama pull nomic-embed-text"
-    restart: "no"
 
   # ── Backend (Python FastAPI) ───────────────────────────────────────
   backend:

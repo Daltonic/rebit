@@ -71,6 +71,16 @@ async function getAuthMiddleware() {
     secret = process.env.AUTH_SECRET ?? undefined;
   }
 
+  // If no secret is available at all, return a no-op middleware.
+  // This handles the case during initial setup before the secret is
+  // configured in the database or environment. Creating a NextAuth
+  // instance without a secret would log a noisy MissingSecret error.
+  if (!secret) {
+    const noop = async () => NextResponse.next();
+    authMiddlewareInstance = noop as ReturnType<typeof NextAuth>['auth'];
+    return authMiddlewareInstance;
+  }
+
   const instance = NextAuth({
     ...authConfig,
     secret,

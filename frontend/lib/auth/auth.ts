@@ -51,6 +51,26 @@ async function getNextAuth() {
     secret = process.env.AUTH_SECRET ?? undefined;
   }
 
+  // If no secret is available at all, return a mock instance.
+  // During initial setup, the secret may not be configured yet.
+  // Creating a NextAuth instance without a secret would log a noisy
+  // MissingSecret error. The mock instance returns null for auth()
+  // (treating every request as unauthenticated) and passes through
+  // handlers as no-ops.
+  if (!secret) {
+    const mock = {
+      auth: async () => null,
+      handlers: {
+        GET: async (req: any) => new Response('Not configured', { status: 503 }),
+        POST: async (req: any) => new Response('Not configured', { status: 503 }),
+      },
+      signIn: async () => { throw new Error('Auth not configured'); },
+      signOut: async () => { throw new Error('Auth not configured'); },
+    };
+    nextAuthInstance = mock as any;
+    return nextAuthInstance;
+  }
+
   // Try to read OAuth provider config from the database
   let googleClientId: string | undefined;
   let googleClientSecret: string | undefined;
