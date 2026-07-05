@@ -1,29 +1,81 @@
 'use client';
-import { use, useState } from 'react';
+import { use, useState, useEffect } from 'react';
 import Link from 'next/link';
-import { mockJobs } from '@/lib/mock/data';
 import ClipCard from '@/components/ClipCard';
-import { ArrowLeft, Download } from 'lucide-react';
+import { ArrowLeft, Download, Loader2 } from 'lucide-react';
 import { Segment, SegmentStatus } from '@/lib/types';
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
 type SortBy = 'virality' | 'time';
 
+interface JobData {
+  id: string;
+  status: string;
+  sourceFilename: string;
+  sourceSiaObjectId: string | null;
+  segments: Segment[];
+}
+
 export default function ClipsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const job = mockJobs.find(j => j.id === id);
-  const [segments, setSegments] = useState<Segment[]>(job?.segments ?? []);
+  const [jobData, setJobData] = useState<JobData | null>(null);
+  const [segments, setSegments] = useState<Segment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<SegmentStatus | 'all'>('all');
   const [sortBy, setSortBy] = useState<SortBy>('virality');
 
-  if (!job) return (
-    <div className="max-w-2xl mx-auto px-4 py-16 text-center">
-      <p style={{ color: 'var(--text-muted)' }}>Job not found.</p>
-      <Link href="/projects" className="mt-3 inline-block text-sm" style={{ color: 'var(--accent-bright)' }}>← Back to projects</Link>
-    </div>
-  );
+  useEffect(() => {
+    const fetchJob = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(`${BACKEND_URL}/api/jobs/${id}`);
+        if (!res.ok) {
+          if (res.status === 404) {
+            setError('Job not found');
+            return;
+          }
+          throw new Error(`Failed to fetch job: ${res.status}`);
+        }
+        const data: JobData = await res.json();
+        setJobData(data);
+        setSegments(data.segments || []);
+        setError(null);
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Failed to load clips');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchJob();
+  }, [id]);
 
-  const handleApprove = (segId: string) => setSegments(prev => prev.map(s => s.id === segId ? { ...s, status: 'approved' } : s));
-  const handleReject = (segId: string) => setSegments(prev => prev.map(s => s.id === segId ? { ...s, status: 'rejected' } : s));
+  // Poll for new segments if job is still processing
+  useEffect(() => {
+    if (!jobData) return;
+    if (['complete', 'failed'].includes(jobData.status)) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/jobs/${id}`);
+        if (res.ok) {
+          const data: JobData = await res.json();
+          setJobData(data);
+          if (data.segments) setSegments(data.segments);
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [id, jobData?.status]);
+
+  const handleApprove = (segId: string) =>
+    setSegments(prev => prev.map(s => s.id === segId ? { ...s, status: 'approved' } : s));
+  const handleReject = (segId: string) =>
+    setSegments(prev => prev.map(s => s.id === segId ? { ...s, status: 'rejected' } : s));
 
   const filtered = segments
     .filter(s => statusFilter === 'all' || s.status === statusFilter)
@@ -31,6 +83,24 @@ export default function ClipsPage({ params }: { params: Promise<{ id: string }> 
 
   const approved = segments.filter(s => s.status === 'approved').length;
   const pending = segments.filter(s => s.status === 'pending').length;
+
+  if (loading) {
+    return (
+      <div className="max-w-6xl mx-auto px-4 py-16 text-center">
+        <Loader2 size={24} className="animate-spin mx-auto" style={{ color: 'var(--accent-bright)' }} />
+        <p className="mt-3 text-sm" style={{ color: 'var(--text-muted)' }}>Loading clips...</p>
+      </div>
+    );
+  }
+
+  if (error || !jobData) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+        <p style={{ color: 'var(--text-muted)' }}>{error || 'Job not found.'}</p>
+        <Link href="/projects" className="mt-3 inline-block text-sm" style={{ color: 'var(--accent-bright)' }}>← Back to projects</Link>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 sm:py-8">
@@ -47,7 +117,7 @@ export default function ClipsPage({ params }: { params: Promise<{ id: string }> 
             Clip Review
           </h1>
           <p className="text-sm mt-0.5 truncate max-w-xs" style={{ color: 'var(--text-muted)' }}>
-            {job.sourceFilename}
+            {jobData.sourceFilename}
           </p>
         </div>
 
@@ -105,12 +175,21 @@ export default function ClipsPage({ params }: { params: Promise<{ id: string }> 
       {/* Grid */}
       {filtered.length === 0 ? (
         <div className="text-center py-16 px-4 rounded-xl" style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
-          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No clips match this filter.</p>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            {segments.length === 0
+              ? 'No clips have been generated yet. The pipeline may still be processing.'
+              : 'No clips match this filter.'}
+          </p>
+          {segments.length === 0 && (
+            <Link href={`/projects/${id}`} className="mt-3 inline-block text-sm" style={{ color: 'var(--accent-bright)' }}>
+              ← Back to pipeline
+            </Link>
+          )}
         </div>
       ) : (
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filtered.map(seg => (
-            <ClipCard key={seg.id} segment={seg} sourceUrl={job.sourceUrl} onApprove={handleApprove} onReject={handleReject} />
+            <ClipCard key={seg.id} segment={seg} onApprove={handleApprove} onReject={handleReject} />
           ))}
         </div>
       )}

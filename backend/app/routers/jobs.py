@@ -19,6 +19,58 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
+@router.get("")
+async def list_jobs(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    GET /api/jobs
+
+    Returns a list of all jobs, ordered by most recently created first.
+    Each job includes its pipeline steps and segment count.
+    """
+    result = await db.execute(
+        select(Job).order_by(Job.created_at.desc()).limit(50)
+    )
+    jobs = result.scalars().all()
+
+    return [
+        {
+            "id": job.id,
+            "status": job.status,
+            "sourceFilename": job.source_filename,
+            "sourceSiaObjectId": job.source_sia_object_id,
+            "durationSeconds": job.duration_seconds,
+            "siaHash": job.sia_hash,
+            "siaStatus": job.sia_status,
+            "createdAt": job.created_at.isoformat() if job.created_at else None,
+            "updatedAt": job.updated_at.isoformat() if job.updated_at else None,
+            "pipelineSteps": [
+                {
+                    "id": step.id,
+                    "stage": step.stage,
+                    "status": step.status,
+                    "progressPct": step.progress_pct,
+                    "message": step.message,
+                    "startedAt": step.started_at.isoformat() if step.started_at else None,
+                    "completedAt": step.completed_at.isoformat() if step.completed_at else None,
+                }
+                for step in (await db.execute(
+                    select(PipelineStep)
+                    .where(PipelineStep.job_id == job.id)
+                    .order_by(PipelineStep.started_at.asc().nullsfirst(), PipelineStep.stage)
+                )).scalars().all()
+            ],
+            "segmentCount": len(
+                (await db.execute(
+                    select(Segment).where(Segment.job_id == job.id)
+                )).scalars().all()
+            ),
+        }
+        for job in jobs
+    ]
+
+
 @router.get("/{job_id}")
 async def get_job_status(
     job_id: str,
