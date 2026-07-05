@@ -1,10 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { inngest } from './client';
-
-const BACKEND_URL = process.env.BACKEND_URL ?? 'http://localhost:8000';
+import { getBackendUrl } from '@/lib/config';
 
 async function callBackend(path: string, body: object) {
-  const res = await fetch(`${BACKEND_URL}${path}`, {
+  const backendUrl = await getBackendUrl();
+  const res = await fetch(`${backendUrl}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

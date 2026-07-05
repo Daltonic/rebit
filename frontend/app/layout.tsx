@@ -22,7 +22,14 @@ export const viewport: Viewport = {
 export const dynamic = 'force-dynamic';
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const session = await auth();
+  // Gracefully handle auth errors — during initial setup the auth secret
+  // may not exist in the database yet, so auth() would throw.
+  let session = null;
+  try {
+    session = await auth();
+  } catch {
+    // Auth not configured yet (e.g. during setup) — pass null session
+  }
 
   return (
     <html lang="en">

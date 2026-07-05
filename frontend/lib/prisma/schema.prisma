@@ -63,6 +63,12 @@ model AppSettings {
   webauthnRpId       String?
   webauthnOrigin     String?
 
+  // Auth secret (generated during setup, stored in DB instead of env)
+  authSecret         String?
+
+  // Backend URL (FastAPI service URL, stored in DB instead of env)
+  backendUrl         String?
+
   // Pipeline retry config
   difficultyMaxRetries Int    @default(3)
   updatedAt          DateTime @updatedAt

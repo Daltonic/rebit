@@ -2,16 +2,14 @@ import { NextResponse, NextFetchEvent } from 'next/server';
 import type { NextRequest } from 'next/server';
 import NextAuth from 'next-auth';
 import { authConfig } from '@/lib/auth/auth.config';
-
-const authMiddleware = NextAuth(authConfig).auth;
+import { prisma } from '@/lib/prisma/client';
 
 // ── Setup Status Cache ──────────────────────────────────────────────────
 // The setup status only changes during the initial setup flow, so we cache
 // it aggressively to avoid hammering the API on every single request.
-// This prevents the Turbopack async hooks Map from growing unbounded.
 let cachedSetupComplete: boolean | null = null;
 let cacheTimestamp = 0;
-const CACHE_TTL_MS = 10_000; // 10 seconds — balances freshness with safety
+const CACHE_TTL_MS = 10_000; // 10 seconds
 
 async function checkSetupComplete(baseUrl: string): Promise<boolean> {
   const now = Date.now();
@@ -44,6 +42,42 @@ async function checkSetupComplete(baseUrl: string): Promise<boolean> {
 export function invalidateSetupCache() {
   cachedSetupComplete = null;
   cacheTimestamp = 0;
+}
+
+// ── Lazy Auth Middleware ─────────────────────────────────────────────────
+// We create the auth middleware lazily so it can read the secret from the
+// database rather than requiring AUTH_SECRET as an environment variable.
+let authMiddlewareInstance: ReturnType<typeof NextAuth>['auth'] | null = null;
+
+async function getAuthMiddleware() {
+  if (authMiddlewareInstance) return authMiddlewareInstance;
+
+  // Try to read the auth secret from the database first
+  let secret: string | undefined;
+  try {
+    const settings = await prisma.appSettings.findUnique({
+      where: { id: 'default' },
+      select: { authSecret: true },
+    });
+    if (settings?.authSecret) {
+      secret = settings.authSecret;
+    }
+  } catch {
+    // DB unavailable — fall through to env var
+  }
+
+  // Fallback to environment variable
+  if (!secret) {
+    secret = process.env.AUTH_SECRET ?? undefined;
+  }
+
+  const instance = NextAuth({
+    ...authConfig,
+    secret,
+  });
+
+  authMiddlewareInstance = instance.auth;
+  return authMiddlewareInstance;
 }
 
 /**
@@ -81,9 +115,29 @@ export default async function proxy(
     }
   }
 
+  // ── Skip auth middleware for setup-related paths ──────────────────
+  // During setup, there are no users yet, so auth checks would fail.
+  // The setup wizard is pre-auth by design.
+  if (
+    pathname === '/setup' ||
+    pathname.startsWith('/api/setup') ||
+    pathname === '/login' ||
+    pathname.startsWith('/api/auth')
+  ) {
+    return NextResponse.next();
+  }
+
   // ── Delegate to NextAuth for auth checks ─────────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return authMiddleware(request as any, event as any);
+  try {
+    const authMiddleware = await getAuthMiddleware();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return authMiddleware(request as any, event as any);
+  } catch (err) {
+    console.error('Auth middleware error:', err);
+    // If auth middleware fails (e.g. no secret configured yet), allow the
+    // request through — the page component will handle the unauthenticated state.
+    return NextResponse.next();
+  }
 }
 
 export const config = {

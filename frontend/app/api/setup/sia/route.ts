@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
 import { invalidateSetupCache } from '@/proxy';
+import { getBackendUrl } from '@/lib/config';
 
 /**
  * GET /api/setup/sia
@@ -108,7 +109,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    const backendUrl = await getBackendUrl();
 
     // When reconnecting from the settings page, first disconnect the backend
     // so a fresh registration + approval flow can begin. Do NOT write to the

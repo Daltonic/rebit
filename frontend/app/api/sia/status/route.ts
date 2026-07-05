@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
+import { getBackendUrl } from '@/lib/config';
 
 /**
  * GET /api/sia/status
@@ -28,7 +29,7 @@ export async function GET() {
     }
 
     // Get status from backend (which owns the Sia SDK)
-    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    const backendUrl = await getBackendUrl();
     let connected = false;
     let mode: 'live' | 'demo' = 'demo';
     let reason: string | null = 'Backend unreachable';
