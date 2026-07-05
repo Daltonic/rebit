@@ -1,10 +1,11 @@
 'use client';
-import { use } from 'react';
+import { use, useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { mockJobs } from '@/lib/mock/data';
 import PipelineTracker from '@/components/PipelineTracker';
-import { ArrowLeft, ArrowRight } from 'lucide-react';
-import { JobStatus } from '@/lib/types';
+import { ArrowLeft, ArrowRight, Loader2 } from 'lucide-react';
+import { JobStatus, PipelineStep, Segment } from '@/lib/types';
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
 function formatDuration(s: number | null) {
   if (!s) return '—';
@@ -13,8 +14,9 @@ function formatDuration(s: number | null) {
   return h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
 }
 
-const STATUS_LABEL: Record<JobStatus, string> = {
-  uploading: 'Uploading',
+const STATUS_LABEL: Record<string, string> = {
+  uploading: 'Uploading to Sia...',
+  uploaded: 'Upload complete',
   transcribing: 'Transcribing audio',
   detecting: 'Detecting highlights',
   extracting: 'Extracting clips',
@@ -24,22 +26,100 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   failed: 'Failed',
 };
 
+interface JobData {
+  id: string;
+  status: string;
+  sourceFilename: string;
+  sourceSiaObjectId: string | null;
+  durationSeconds: number | null;
+  siaHash: string | null;
+  siaStatus: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  pipelineSteps: PipelineStep[];
+  segments: Segment[];
+  transcript: { id: string; wordCount: number; createdAt: string | null } | null;
+  siaLogs: { id: string; step: string; passed: boolean | null; message: string; ts: string | null }[];
+}
+
 export default function JobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const job = mockJobs.find(j => j.id === id);
+  const [jobData, setJobData] = useState<JobData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  if (!job) return (
-    <div className="max-w-2xl mx-auto px-4 py-16 text-center">
-      <p style={{ color: 'var(--text-muted)' }}>Job not found.</p>
-      <Link href="/projects" className="mt-3 inline-block text-sm" style={{ color: 'var(--accent-bright)' }}>← Back to projects</Link>
-    </div>
-  );
+  const fetchJobStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/jobs/${id}`);
+      if (!res.ok) {
+        if (res.status === 404) {
+          setError('Job not found');
+          setLoading(false);
+          return;
+        }
+        throw new Error(`Failed to fetch job: ${res.status}`);
+      }
+      const data: JobData = await res.json();
+      setJobData(data);
+      setLoading(false);
+      setError(null);
+      return data;
+    } catch (e: any) {
+      if (!jobData) {
+        setError(e.message || 'Failed to load job');
+        setLoading(false);
+      }
+      return null;
+    }
+  }, [id, jobData]);
 
-  const steps = job.pipelineSteps ?? [];
-  const isComplete = job.status === 'complete';
+  // Initial fetch
+  useEffect(() => {
+    fetchJobStatus();
+  }, [id]);
+
+  // Poll for pipeline updates while job is in progress
+  useEffect(() => {
+    if (!jobData) return;
+
+    const terminalStatuses = ['complete', 'failed'];
+    if (terminalStatuses.includes(jobData.status)) return;
+
+    const interval = setInterval(async () => {
+      const data = await fetchJobStatus();
+      if (data && terminalStatuses.includes(data.status)) {
+        clearInterval(interval);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(interval);
+  }, [jobData?.status, fetchJobStatus]);
+
+  if (loading) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+        <Loader2 size={24} className="animate-spin mx-auto" style={{ color: 'var(--accent-bright)' }} />
+        <p className="mt-3 text-sm" style={{ color: 'var(--text-muted)' }}>Loading job...</p>
+      </div>
+    );
+  }
+
+  if (error || !jobData) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+        <p style={{ color: 'var(--text-muted)' }}>{error || 'Job not found.'}</p>
+        <Link href="/projects" className="mt-3 inline-block text-sm" style={{ color: 'var(--accent-bright)' }}>← Back to projects</Link>
+      </div>
+    );
+  }
+
+  const steps = jobData.pipelineSteps ?? [];
+  const isComplete = jobData.status === 'complete';
+  const isFailed = jobData.status === 'failed';
+  const segmentCount = jobData.segments?.length ?? 0;
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-8">
+    <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
       {/* Back */}
       <Link href="/projects" className="inline-flex items-center gap-1.5 text-sm mb-6 transition-colors"
         style={{ color: 'var(--text-muted)' }}>
@@ -48,54 +128,75 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
 
       <div className="grid gap-5 md:grid-cols-[1fr_260px]">
         {/* Pipeline */}
-        <div className="space-y-5">
+        <div className="space-y-5 order-2 md:order-1">
           <div>
             <h1 className="text-lg font-semibold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.025em' }}>
-              {STATUS_LABEL[job.status]}
+              {STATUS_LABEL[jobData.status] || jobData.status}
             </h1>
-            <p className="text-sm mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{job.sourceFilename}</p>
+            <p className="text-sm mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{jobData.sourceFilename}</p>
           </div>
 
           <PipelineTracker steps={steps} />
 
-          {isComplete && (
-            <Link href={`/projects/${job.id}/clips`}
-              className="flex items-center justify-between px-5 py-4 rounded-xl transition-all hover:scale-[1.01]"
+          {/* Error state */}
+          {isFailed && (
+            <div className="px-4 py-3 rounded-lg text-sm"
+              style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: 'var(--danger)' }}>
+              Pipeline failed. Check the logs for details.
+            </div>
+          )}
+
+          {/* Complete state — link to clips */}
+          {isComplete && segmentCount > 0 && (
+            <Link href={`/projects/${jobData.id}/clips`}
+              className="flex items-center justify-between gap-3 px-5 py-4 rounded-xl transition-all hover:scale-[1.01]"
               style={{ background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.3)' }}>
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Review clips</p>
                 <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  {job._count?.segments ?? 0} clips ready to approve or reject
+                  {segmentCount} clips ready to approve or reject
                 </p>
               </div>
-              <ArrowRight size={16} style={{ color: 'var(--accent-bright)' }} />
+              <ArrowRight size={16} className="flex-shrink-0" style={{ color: 'var(--accent-bright)' }} />
             </Link>
+          )}
+
+          {/* Sia logs */}
+          {jobData.siaLogs && jobData.siaLogs.length > 0 && (
+            <div className="rounded-xl p-4" style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+              <h3 className="text-xs uppercase mb-2" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)', letterSpacing: '0.08em', fontSize: '10px' }}>
+                Sia Logs
+              </h3>
+              <div className="space-y-1.5">
+                {jobData.siaLogs.map((log) => (
+                  <div key={log.id} className="flex items-start gap-2 text-xs">
+                    <span style={{
+                      color: log.passed === true ? 'var(--success)' : log.passed === false ? 'var(--danger)' : 'var(--text-muted)',
+                      fontFamily: 'var(--mono)',
+                    }}>
+                      {log.passed === true ? '✓' : log.passed === false ? '✗' : '·'}
+                    </span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{log.message}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
 
         {/* Sidebar */}
-        <div className="space-y-3">
+        <div className="space-y-3 order-1 md:order-2">
           <div className="rounded-xl p-4 space-y-3" style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
             <h2 className="text-xs uppercase" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)', letterSpacing: '0.08em', fontSize: '10px' }}>
               Source Video
             </h2>
-            {job.sourceUrl && (
-              <div className="rounded-lg overflow-hidden" style={{ aspectRatio: '16 / 9' }}>
-                <video
-                  src={job.sourceUrl}
-                  controls
-                  preload="metadata"
-                  className="w-full h-full object-cover"
-                  style={{ background: '#000' }}
-                />
-              </div>
-            )}
             <div className="space-y-2 text-xs" style={{ fontFamily: 'var(--mono)' }}>
               {[
-                { label: 'File', value: job.sourceFilename },
-                { label: 'Duration', value: formatDuration(job.durationSeconds) },
-                { label: 'Job ID', value: job.id },
-                { label: 'Sia ID', value: job.sourceSiaObjectId ?? 'not stored' },
+                { label: 'File', value: jobData.sourceFilename },
+                { label: 'Duration', value: formatDuration(jobData.durationSeconds) },
+                { label: 'Job ID', value: jobData.id },
+                { label: 'Sia ID', value: jobData.sourceSiaObjectId ?? 'not stored' },
+                { label: 'Status', value: STATUS_LABEL[jobData.status] || jobData.status },
               ].map(({ label, value }) => (
                 <div key={label}>
                   <span style={{ color: 'var(--text-muted)' }}>{label}</span>
@@ -104,6 +205,27 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
               ))}
             </div>
           </div>
+
+          {/* Pipeline summary */}
+          {steps.length > 0 && (
+            <div className="rounded-xl p-4 space-y-2" style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+              <h2 className="text-xs uppercase" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)', letterSpacing: '0.08em', fontSize: '10px' }}>
+                Pipeline
+              </h2>
+              {steps.map((step) => (
+                <div key={step.stage} className="flex items-center justify-between text-xs">
+                  <span style={{ color: 'var(--text-secondary)' }}>{step.stage}</span>
+                  <span style={{
+                    color: step.status === 'complete' ? 'var(--success)' :
+                           step.status === 'running' ? 'var(--accent-bright)' :
+                           step.status === 'failed' ? 'var(--danger)' : 'var(--text-muted)',
+                  }}>
+                    {step.status === 'running' ? `${step.progressPct}%` : step.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

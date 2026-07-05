@@ -6,6 +6,7 @@ import { Upload, Video, AlertCircle, CheckCircle2, Loader2, File } from 'lucide-
 const ACCEPTED = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska'];
 const ACCEPTED_EXT = ['.mp4', '.mov', '.webm', '.mkv'];
 const MAX_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
 function formatBytes(b: number) {
   if (b < 1024) return `${b} B`;
@@ -22,6 +23,7 @@ export default function UploadPage() {
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [statusMessage, setStatusMessage] = useState('');
 
   const validate = (f: File): string | null => {
     if (!ACCEPTED.includes(f.type) && !ACCEPTED_EXT.some(ext => f.name.toLowerCase().endsWith(ext))) {
@@ -45,27 +47,90 @@ export default function UploadPage() {
     if (f) pick(f);
   }, []);
 
-  const simulateUpload = async () => {
+  const uploadToBackend = async () => {
+    if (!file) return;
+
     setUploading(true);
-    // Simulate progress
-    for (let i = 0; i <= 100; i += 5) {
-      await new Promise(r => setTimeout(r, 80));
-      setProgress(i);
+    setProgress(0);
+    setStatusMessage('Uploading to server...');
+
+    try {
+      // Step 1: Upload the file to the backend
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const xhr = new XMLHttpRequest();
+
+      // Track upload progress
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 30); // 0-30% for upload
+          setProgress(pct);
+          setStatusMessage(`Uploading to server... ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`);
+        }
+      });
+
+      const uploadPromise = new Promise<{ jobId: string; siaObjectId: string; siaStatus: string; status: string }>((resolve, reject) => {
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(JSON.parse(xhr.responseText));
+          } else {
+            try {
+              const err = JSON.parse(xhr.responseText);
+              reject(new Error(err.detail || 'Upload failed'));
+            } catch {
+              reject(new Error(`Upload failed with status ${xhr.status}`));
+            }
+          }
+        });
+        xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+        xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
+      });
+
+      xhr.open('POST', `${BACKEND_URL}/api/upload`);
+      xhr.send(formData);
+
+      const result = await uploadPromise;
+      const { jobId, siaObjectId, siaStatus } = result;
+
+      setProgress(35);
+      setStatusMessage('Video stored on Sia Network! Starting pipeline...');
+
+      // Step 2: Start the pipeline (if Inngest didn't auto-trigger)
+      try {
+        const pipelineRes = await fetch(`${BACKEND_URL}/api/jobs/${jobId}/start-pipeline`);
+        if (!pipelineRes.ok) {
+          console.warn('Pipeline start returned non-OK, pipeline may still run via Inngest');
+        }
+      } catch (e) {
+        console.warn('Could not start pipeline via backend, Inngest may handle it:', e);
+      }
+
+      setProgress(50);
+      setStatusMessage('Pipeline started! Redirecting to project...');
+
+      // Step 3: Redirect to the project page
+      // Small delay so the user sees the "Pipeline started" message
+      await new Promise(r => setTimeout(r, 500));
+      router.push(`/projects/${jobId}`);
+
+    } catch (err: any) {
+      setError(err.message || 'Upload failed. Please try again.');
+      setUploading(false);
+      setProgress(0);
+      setStatusMessage('');
     }
-    // In production: POST to /api/jobs with FormData, get back job.id
-    // Then redirect to /projects/[id]
-    router.push('/projects/job_01jx4k2m');
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4 py-12">
+    <div className="min-h-screen flex flex-col items-center justify-center px-4 py-10 sm:py-12">
       <div className="w-full max-w-xl">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-semibold mb-2" style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
+          <h1 className="text-xl sm:text-2xl font-semibold mb-2" style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
             Upload a video
           </h1>
-          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+          <p className="text-sm px-2" style={{ color: 'var(--text-secondary)' }}>
             MP4, MOV, WebM, or MKV · Up to 5 GB · 2 hours max
           </p>
         </div>
@@ -75,12 +140,12 @@ export default function UploadPage() {
           onDragOver={e => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
-          onClick={() => !file && inputRef.current?.click()}
+          onClick={() => !file && !uploading && inputRef.current?.click()}
           className="rounded-2xl transition-all duration-200 cursor-pointer"
           style={{
             border: `2px dashed ${dragging ? 'var(--accent-bright)' : file ? 'var(--success)' : 'var(--border)'}`,
             background: dragging ? 'var(--accent-glow)' : 'var(--bg-card)',
-            padding: file ? '24px' : '56px 24px',
+            padding: file ? '20px' : '40px 20px',
           }}>
 
           {!file ? (
@@ -94,7 +159,7 @@ export default function UploadPage() {
                   Drop your video here
                 </p>
                 <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  or click to browse
+                  or tap to browse
                 </p>
               </div>
             </div>
@@ -119,6 +184,7 @@ export default function UploadPage() {
             type="file"
             accept={ACCEPTED_EXT.join(',')}
             className="hidden"
+            disabled={uploading}
             onChange={e => { const f = e.target.files?.[0]; if (f) pick(f); }}
           />
         </div>
@@ -136,7 +202,7 @@ export default function UploadPage() {
         {uploading && (
           <div className="mt-4">
             <div className="flex justify-between text-xs mb-1.5" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)' }}>
-              <span>Uploading…</span>
+              <span>{statusMessage || 'Uploading…'}</span>
               <span>{progress}%</span>
             </div>
             <div className="score-bar">
@@ -146,18 +212,11 @@ export default function UploadPage() {
         )}
 
         {/* Actions */}
-        <div className="mt-6 flex gap-3">
-          {file && !uploading && (
-            <button onClick={() => { setFile(null); setError(null); }}
-              className="flex-shrink-0 px-4 py-2.5 rounded-lg text-sm transition-colors"
-              style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-              Clear
-            </button>
-          )}
+        <div className="mt-6 flex flex-col sm:flex-row gap-3">
           <button
-            onClick={file && !uploading ? simulateUpload : () => inputRef.current?.click()}
+            onClick={file && !uploading ? uploadToBackend : () => inputRef.current?.click()}
             disabled={uploading}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all"
+            className="order-2 sm:order-1 flex-1 flex items-center justify-center gap-2 py-3 sm:py-2.5 rounded-lg text-sm font-semibold transition-all"
             style={{
               background: file ? 'var(--accent)' : 'var(--bg-elevated)',
               color: file ? 'white' : 'var(--text-muted)',
@@ -166,21 +225,28 @@ export default function UploadPage() {
               opacity: uploading ? 0.7 : 1,
             }}>
             {uploading
-              ? <><Loader2 size={14} className="animate-spin" /> Starting pipeline…</>
+              ? <><Loader2 size={14} className="animate-spin" /> {progress < 35 ? 'Uploading to Sia…' : 'Starting pipeline…'}</>
               : file
               ? <><Upload size={14} /> Start processing</>
               : <><File size={14} /> Choose a file</>
             }
           </button>
+          {file && !uploading && (
+            <button onClick={() => { setFile(null); setError(null); }}
+              className="order-1 sm:order-2 flex-shrink-0 px-4 py-3 sm:py-2.5 rounded-lg text-sm transition-colors"
+              style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+              Clear
+            </button>
+          )}
         </div>
 
         {/* Format hints */}
-        <div className="mt-6 grid grid-cols-2 gap-3">
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
+            { label: 'Sia Storage', desc: 'Video stored on Sia Network first' },
             { label: 'Transcription', desc: 'Whisper v3 — runs locally' },
-            { label: 'Highlight AI', desc: 'Ollama — no API key needed' },
+            { label: 'Highlight AI', desc: 'Detects engaging moments' },
             { label: 'Output format', desc: '9:16 MP4 with captions' },
-            { label: 'Storage', desc: 'Sia Network — you own the keys' },
           ].map(({ label, desc }) => (
             <div key={label} className="px-4 py-3 rounded-lg"
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
