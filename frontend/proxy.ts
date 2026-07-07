@@ -77,7 +77,7 @@ async function getAuthMiddleware() {
   // instance without a secret would log a noisy MissingSecret error.
   if (!secret) {
     const noop = async () => NextResponse.next();
-    authMiddlewareInstance = noop as ReturnType<typeof NextAuth>['auth'];
+    authMiddlewareInstance = noop as unknown as ReturnType<typeof NextAuth>['auth'];
     return authMiddlewareInstance;
   }
 

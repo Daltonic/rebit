@@ -9,6 +9,7 @@
  * else can be configured through the setup wizard and stored in the DB.
  */
 import { prisma } from '@/lib/prisma/client';
+import fs from 'fs';
 
 // ── In-memory cache for hot-path reads ──────────────────────────────────
 // The config only changes during setup, so we cache aggressively to avoid
@@ -61,12 +62,18 @@ export async function getAuthSecret(): Promise<string | null> {
 
 /**
  * Read the backend URL from the database, falling back to BACKEND_URL env var.
- * Returns 'http://backend:8000' as the default if neither is available.
+ * Returns 'http://localhost:8000' as the default if neither is available.
+ *
+ * IMPORTANT: If the database has a stale Docker-internal hostname (e.g.
+ * "http://backend:8000") but the app is running outside Docker (no
+ * container named "backend" is resolvable), the env var or localhost
+ * fallback is used instead. This prevents ENOTFOUND errors when switching
+ * between Docker Compose and local dev environments.
  */
 export async function getBackendUrl(): Promise<string> {
   // Check cache first
   if (isCacheFresh() && cachedSettings) {
-    return cachedSettings.backendUrl ?? process.env.BACKEND_URL ?? 'http://backend:8000';
+    return resolveBackendUrl(cachedSettings.backendUrl);
   }
 
   try {
@@ -81,13 +88,45 @@ export async function getBackendUrl(): Promise<string> {
         backendUrl: settings.backendUrl,
       };
       cacheTimestamp = Date.now();
-      return settings.backendUrl;
+      return resolveBackendUrl(settings.backendUrl);
     }
   } catch {
     // DB unavailable — fall through to env var
   }
 
-  return process.env.BACKEND_URL ?? 'http://backend:8000';
+  return resolveBackendUrl(null);
+}
+
+/**
+ * Resolve a backend URL candidate, replacing Docker-internal hostnames
+ * with localhost when running outside a Docker container.
+ */
+function resolveBackendUrl(dbValue: string | null): string {
+  const envValue = process.env.BACKEND_URL;
+  const candidate = dbValue ?? envValue ?? 'http://localhost:8000';
+
+  // If the candidate uses a Docker service hostname and we're NOT inside
+  // Docker, replace it with localhost so the connection works.
+  if (
+    /https?:\/\/(backend|postgres|inngest|ollama)([:\/]|$)/i.test(candidate) &&
+    !isRunningInDocker()
+  ) {
+    return candidate.replace(
+      /\/\/(backend|postgres|inngest|ollama)/i,
+      '//localhost',
+    );
+  }
+
+  return candidate;
+}
+
+/** Quick check: are we running inside a Docker container? */
+function isRunningInDocker(): boolean {
+  try {
+    return fs.existsSync('/.dockerenv');
+  } catch {
+    return false;
+  }
 }
 
 /**

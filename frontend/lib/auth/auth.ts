@@ -29,7 +29,7 @@ let nextAuthInstance:
     }
   | undefined;
 
-async function getNextAuth() {
+async function getNextAuth(): Promise<any> {
   if (nextAuthInstance) return nextAuthInstance;
 
   // Try to read the auth secret from the database first
