@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # Sia Storage
     sia_mode: str = "auto"  # "auto" | "demo"
-    sia_key_path: str = "/tmp/sia/appkey.hex"
+    sia_key_path: str = ".sia/appkey.hex"
     sia_indexer_url: str = ""
     sia_app_id: str = ""
     sia_app_name: str = "ReBit"
