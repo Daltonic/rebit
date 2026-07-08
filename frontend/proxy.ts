@@ -1,7 +1,6 @@
 import { NextResponse, NextFetchEvent } from 'next/server';
 import type { NextRequest } from 'next/server';
-import NextAuth from 'next-auth';
-import { authConfig } from '@/lib/auth/auth.config';
+import { auth } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma/client';
 
 // ── Setup Status Cache ──────────────────────────────────────────────────
@@ -42,52 +41,6 @@ async function checkSetupComplete(baseUrl: string): Promise<boolean> {
 export function invalidateSetupCache() {
   cachedSetupComplete = null;
   cacheTimestamp = 0;
-}
-
-// ── Lazy Auth Middleware ─────────────────────────────────────────────────
-// We create the auth middleware lazily so it can read the secret from the
-// database rather than requiring AUTH_SECRET as an environment variable.
-let authMiddlewareInstance: ReturnType<typeof NextAuth>['auth'] | null = null;
-
-async function getAuthMiddleware() {
-  if (authMiddlewareInstance) return authMiddlewareInstance;
-
-  // Try to read the auth secret from the database first
-  let secret: string | undefined;
-  try {
-    const settings = await prisma.appSettings.findUnique({
-      where: { id: 'default' },
-      select: { authSecret: true },
-    });
-    if (settings?.authSecret) {
-      secret = settings.authSecret;
-    }
-  } catch {
-    // DB unavailable — fall through to env var
-  }
-
-  // Fallback to environment variable
-  if (!secret) {
-    secret = process.env.AUTH_SECRET ?? undefined;
-  }
-
-  // If no secret is available at all, return a no-op middleware.
-  // This handles the case during initial setup before the secret is
-  // configured in the database or environment. Creating a NextAuth
-  // instance without a secret would log a noisy MissingSecret error.
-  if (!secret) {
-    const noop = async () => NextResponse.next();
-    authMiddlewareInstance = noop as unknown as ReturnType<typeof NextAuth>['auth'];
-    return authMiddlewareInstance;
-  }
-
-  const instance = NextAuth({
-    ...authConfig,
-    secret,
-  });
-
-  authMiddlewareInstance = instance.auth;
-  return authMiddlewareInstance;
 }
 
 /**
@@ -139,10 +92,15 @@ export default async function proxy(
   }
 
   // ── Delegate to NextAuth for auth checks ─────────────────────────
+  // We reuse the singleton auth() from lib/auth/auth.ts so that only ONE
+  // NextAuth instance exists. Creating a second instance (even with the
+  // same config) can cause cookie encryption mismatches — for example the
+  // PKCE code verifier cookie set by the sign-in handler may fail to
+  // parse during the OAuth callback.
   try {
-    const authMiddleware = await getAuthMiddleware();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return authMiddleware(request as any, event as any);
+    const response = await auth(request as any, event as any);
+    return response;
   } catch (err) {
     console.error('Auth middleware error:', err);
     // If auth middleware fails (e.g. no secret configured yet), allow the
