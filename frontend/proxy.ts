@@ -132,7 +132,8 @@ export default async function proxy(
     pathname === '/setup' ||
     pathname.startsWith('/api/setup') ||
     pathname === '/login' ||
-    pathname.startsWith('/api/auth')
+    pathname.startsWith('/api/auth') ||
+    pathname.startsWith('/api/inngest')
   ) {
     return NextResponse.next();
   }
@@ -151,5 +152,5 @@ export default async function proxy(
 }
 
 export const config = {
-  matcher: ['/((?!api/auth|_next/static|_next/image|favicon.ico|file.svg|globe.svg|next.svg|vercel.svg|window.svg).*)'],
+  matcher: ['/((?!api/auth|api/inngest|_next/static|_next/image|favicon.ico|file.svg|globe.svg|next.svg|vercel.svg|window.svg).*)'],
 };
