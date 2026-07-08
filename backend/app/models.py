@@ -58,6 +58,7 @@ class Job(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     status: Mapped[str] = mapped_column(String, default="uploading")
     source_filename: Mapped[str] = mapped_column(String)
+    source_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     source_sia_object_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sia_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)

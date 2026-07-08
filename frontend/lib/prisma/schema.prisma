@@ -80,6 +80,7 @@ model Job {
   id                String        @id @default(cuid())
   status            JobStatus     @default(uploading)
   sourceFilename    String        @map("source_filename")
+  sourceUrl         String?       @map("source_url")
   sourceSiaObjectId String?       @map("source_sia_object_id")
   durationSeconds   Int?          @map("duration_seconds")
   siaHash           String?       @map("sia_hash")
