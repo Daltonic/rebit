@@ -126,13 +126,19 @@ def _cookies_path() -> Path:
 def _get_ytdlp_opts() -> dict:
     """Build yt-dlp options, including cookies if configured."""
     # Use a common browser User-Agent to avoid YouTube bot detection.
-    # We do NOT force player clients or extractor args — let yt-dlp's
-    # regularly-updated defaults handle YouTube's anti-bot measures.
+    # We specifically configure extractor_args to force player clients
+    # that are less aggressively blocked by YouTube. The `android` and
+    # `ios` clients receive different format payloads and often succeed
+    # when the default `web` client is blocked. We also include
+    # `player_client` as a fallback for the full web page extraction.
     opts = {
         "quiet": True,
         "no_warnings": True,
         "format": "bv*+ba/b",
         "ignore_no_formats_error": True,
+        "retries": 5,
+        "extractor_retries": 5,
+        "fragment_retries": 10,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -141,6 +147,18 @@ def _get_ytdlp_opts() -> dict:
             ),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
+        },
+        "extractor_args": {
+            "youtube": {
+                "player_client": [
+                    "android",
+                    "ios",
+                    "web_safari",
+                    "web_creator",
+                    "web",
+                ],
+                "skip": ["webpage"],
+            },
         },
     }
     cookie_path = _cookies_path()
