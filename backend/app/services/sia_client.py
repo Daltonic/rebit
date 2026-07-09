@@ -117,8 +117,8 @@ async def init_sia_client(
                 # Use Builder.connected (async instance method) to reconnect with stored AppKey
                 builder = Builder(indexer_url, metadata)
                 sdk = await builder.connected(app_key)
-                # Verify by checking account
-                account = sdk.account()
+                # Verify by checking account (throws if connection is invalid)
+                _ = await sdk.account()
                 _sdk = sdk
                 _demo_mode = False
                 _demo_reason = ""
