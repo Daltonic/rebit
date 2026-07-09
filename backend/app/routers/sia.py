@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.database import get_db, get_db_optional
 from app.models import AppSettings
 from app.schemas import (
@@ -77,7 +76,7 @@ async def register_init(
         app_name=body.app_name,
         app_description=body.app_description,
         recovery_phrase=body.recovery_phrase,
-        service_url=settings.sia_indexer_url or "http://localhost:3000",
+        service_url="http://localhost:3000",
     )
 
     if result["ok"]:
