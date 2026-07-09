@@ -118,6 +118,8 @@ def _get_ytdlp_opts() -> dict:
         "quiet": True,
         "no_warnings": True,
         "extract_flat": "discard",
+        "format": "bv*+ba/b",
+        "ignore_no_formats_error": True,
     }
     cookie_path = _cookies_path()
     if cookie_path.exists():
