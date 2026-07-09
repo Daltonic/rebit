@@ -352,15 +352,52 @@ def _set_demo_mode(reason: str):
 
 # ── Key Persistence ──────────────────────────────────────────────────────
 
-def _load_app_key() -> Optional[AppKey]:
-    """Load the persisted AppKey from disk."""
+# Legacy path used before switching to persistent storage (inside project dir)
+_LEGACY_KEY_PATH = Path("/tmp/sia/appkey.hex")
+
+
+def _migrate_from_legacy_path() -> bool:
+    """
+    Copy AppKey from legacy /tmp/sia/appkey.hex to the new persistent path
+    if the legacy file exists and the new one doesn't. Returns True if a
+    migration occurred.
+    """
+    target = Path(settings.sia_key_path)
+    if target.exists():
+        return False  # Already at the new location — nothing to do
+    if not _LEGACY_KEY_PATH.exists():
+        return False  # No legacy file to migrate
     try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        hex_key = _LEGACY_KEY_PATH.read_text().strip()
+        target.write_text(hex_key)
+        logger.info(f"Migrated AppKey from {_LEGACY_KEY_PATH} to {target}")
+        # Remove the legacy file once copied
+        _LEGACY_KEY_PATH.unlink()
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to migrate AppKey from legacy path: {e}")
+        return False
+
+
+def _load_app_key() -> Optional[AppKey]:
+    """Load the persisted AppKey from disk, with legacy migration."""
+    try:
+        # Try the configured (persistent) path first
         key_path = Path(settings.sia_key_path)
-        if not key_path.exists():
-            return None
-        hex_key = key_path.read_text().strip()
-        key_bytes = bytes.fromhex(hex_key)
-        return AppKey(key_bytes)
+        if key_path.exists():
+            hex_key = key_path.read_text().strip()
+            key_bytes = bytes.fromhex(hex_key)
+            return AppKey(key_bytes)
+
+        # Not at the new path — try migrating from the legacy /tmp/ path
+        if _migrate_from_legacy_path():
+            # Migration succeeded, re-read from new path
+            hex_key = key_path.read_text().strip()
+            key_bytes = bytes.fromhex(hex_key)
+            return AppKey(key_bytes)
+
+        return None
     except Exception as e:
         logger.warning(f"Failed to load AppKey: {e}")
         return None
