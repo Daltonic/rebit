@@ -125,16 +125,19 @@ def _cookies_path() -> Path:
 
 def _get_ytdlp_opts() -> dict:
     """Build yt-dlp options, including cookies if configured."""
-    # Use a common browser User-Agent to avoid YouTube bot detection.
-    # We specifically configure extractor_args to force player clients
-    # that are less aggressively blocked by YouTube. The `android` and
-    # `ios` clients receive different format payloads and often succeed
-    # when the default `web` client is blocked. We also include
-    # `player_client` as a fallback for the full web page extraction.
+    # YouTube has ramped up bot detection over the last few months. The
+    # `android`/`ios` clients now frequently get skipped by yt-dlp itself
+    # (they require a PO token or get a 403 mid-negotiation), which is
+    # what produces "No video formats found!" even though `web`-based
+    # info extraction succeeds. `tv` is currently the most reliable
+    # client that doesn't require a PO token for most videos, so we lead
+    # with that and fall back to the others. We also stopped skipping
+    # the webpage — skipping it was preventing yt-dlp from picking up
+    # signature/n-challenge data some clients need to resolve formats.
     opts = {
         "quiet": True,
         "no_warnings": True,
-        "format": "bv*+ba/b",
+        "format": "bv*+ba/b/best",
         "ignore_no_formats_error": True,
         "retries": 5,
         "extractor_retries": 5,
@@ -151,13 +154,11 @@ def _get_ytdlp_opts() -> dict:
         "extractor_args": {
             "youtube": {
                 "player_client": [
+                    "tv",
                     "android",
-                    "ios",
                     "web_safari",
-                    "web_creator",
                     "web",
                 ],
-                "skip": ["webpage"],
             },
         },
     }
@@ -165,6 +166,15 @@ def _get_ytdlp_opts() -> dict:
     if cookie_path.exists():
         opts["cookiefile"] = str(cookie_path)
         logger.info(f"Using yt-dlp cookies from: {cookie_path}")
+    else:
+        # Cookies are the single biggest reliability lever for YouTube.
+        # Without them, even the "tv" client trick will eventually get
+        # rate-limited or blocked again as YouTube rolls out new
+        # fingerprinting. Log this so it shows up during debugging.
+        logger.info(
+            "No YouTube cookies configured — uploading a cookies.txt via "
+            "POST /api/url-import/cookies significantly improves reliability."
+        )
     return opts
 
 
@@ -178,8 +188,26 @@ async def _get_or_create_app_settings(db: AsyncSession) -> AppSettings:
     return row
 
 
+# File extensions we'll treat as a direct media link without needing to
+# probe the URL first. Content-Type sniffing (see `_looks_like_direct_media`)
+# still runs for URLs that don't end in one of these, so a CDN link with no
+# extension but a `video/*` Content-Type is also accepted.
+DIRECT_MEDIA_EXTENSIONS = {
+    ".mp4",
+    ".webm",
+    ".mov",
+    ".mkv",
+    ".m4v",
+    ".avi",
+    ".mp3",
+    ".m4a",
+    ".wav",
+    ".ogg",
+}
+
+
 def _is_supported_url(url: str) -> bool:
-    """Check if the URL is from a supported source."""
+    """Check if the URL is from a supported platform (yt-dlp-backed) source."""
     try:
         from urllib.parse import urlparse
 
@@ -188,10 +216,52 @@ def _is_supported_url(url: str) -> bool:
         # Strip port if present
         if ":" in domain:
             domain = domain.split(":")[0]
-        # Strip www prefix for matching
         return domain in SUPPORTED_DOMAINS
     except Exception:
         return False
+
+
+def _has_direct_media_extension(url: str) -> bool:
+    """Check if the URL path ends in a known media file extension."""
+    try:
+        from urllib.parse import urlparse
+
+        path = urlparse(url).path.lower()
+        return any(path.endswith(ext) for ext in DIRECT_MEDIA_EXTENSIONS)
+    except Exception:
+        return False
+
+
+def _looks_like_direct_media(url: str) -> bool:
+    """
+    Determine whether a URL points directly at a media file rather than a
+    platform page that needs yt-dlp. Tries a cheap extension check first,
+    then falls back to a HEAD request and inspects Content-Type.
+    """
+    if _has_direct_media_extension(url):
+        return True
+
+    try:
+        import httpx
+
+        with httpx.Client(follow_redirects=True, timeout=8.0) as client:
+            resp = client.head(url)
+            content_type = resp.headers.get("content-type", "").lower()
+            if content_type.startswith("video/") or content_type.startswith("audio/"):
+                return True
+            # Some CDNs don't respond well to HEAD (405/403) — retry with a
+            # ranged GET so we don't download the whole file just to check.
+            if resp.status_code in (405, 403, 501):
+                resp = client.get(url, headers={"Range": "bytes=0-0"})
+                content_type = resp.headers.get("content-type", "").lower()
+                if content_type.startswith("video/") or content_type.startswith(
+                    "audio/"
+                ):
+                    return True
+    except Exception as e:
+        logger.debug(f"Content-Type probe failed for {url}: {e}")
+
+    return False
 
 
 def _validate_url(url: str) -> Optional[str]:
@@ -212,14 +282,79 @@ def _validate_url(url: str) -> Optional[str]:
     if not url_pattern.match(url):
         return "Invalid URL format. Please enter a valid video URL (e.g., https://www.youtube.com/watch?v=...)."
 
-    if not _is_supported_url(url):
-        return "This URL source is not supported. Supported sources: YouTube, Vimeo, Dailymotion, TikTok, X/Twitter, Instagram, Facebook, Reddit."
+    if _is_supported_url(url):
+        return None
 
-    return None
+    if _looks_like_direct_media(url):
+        return None
+
+    return "This URL source is not supported. Supported sources: YouTube, Vimeo, Dailymotion, TikTok, X/Twitter, Instagram, Facebook, Reddit, or a direct link to a video/audio file."
 
 
-def _extract_info(url: str) -> dict:
-    """Extract video info using yt-dlp."""
+def _classify_url(url: str) -> tuple[Optional[str], bool]:
+    """
+    Validate the URL and classify it in one pass (avoids probing
+    Content-Type twice). Returns (error_message, is_direct_media).
+    """
+    if not url or not url.strip():
+        return "No URL provided.", False
+
+    url = url.strip()
+
+    url_pattern = re.compile(
+        r"^https?://"
+        r"([\w.-]+)"
+        r"(\.[\w.-]+)+"
+        r"[/\w\.\-~:@!#$%&'()*+,;=]*"
+        r"(\?[\w\.\-~:@!#$%&'()*+,;=/]*)?$"
+    )
+    if not url_pattern.match(url):
+        return (
+            "Invalid URL format. Please enter a valid video URL (e.g., https://www.youtube.com/watch?v=...).",
+            False,
+        )
+
+    if _is_supported_url(url):
+        return None, False
+
+    if _looks_like_direct_media(url):
+        return None, True
+
+    return (
+        "This URL source is not supported. Supported sources: YouTube, Vimeo, Dailymotion, TikTok, X/Twitter, Instagram, Facebook, Reddit, or a direct link to a video/audio file.",
+        False,
+    )
+
+
+def _extract_direct_media_info(url: str) -> dict:
+    """
+    Build an info dict for a direct media URL without invoking yt-dlp.
+    We can't know duration without downloading/probing the file, so it's
+    left as None — the pipeline's transcription/analysis step will pick
+    it up from the file itself once downloaded.
+    """
+    from urllib.parse import unquote, urlparse
+
+    path = urlparse(url).path
+    filename = unquote(path.rsplit("/", 1)[-1]) or "video"
+    title = filename.rsplit(".", 1)[0] if "." in filename else filename
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "mp4"
+
+    return {
+        "title": title or "Untitled",
+        "duration": None,
+        "uploader": None,
+        "thumbnail": None,
+        "webpage_url": url,
+        "ext": ext,
+    }
+
+
+def _extract_info(url: str, is_direct: bool = False) -> dict:
+    """Extract video info, either directly (no yt-dlp) or via yt-dlp."""
+    if is_direct:
+        return _extract_direct_media_info(url)
+
     opts = _get_ytdlp_opts()
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -235,11 +370,46 @@ def _extract_info(url: str) -> dict:
         }
 
 
-def _download_video(url: str, output_path: Path) -> tuple[Path, dict]:
+def _download_direct_media(url: str, output_path: Path) -> tuple[Path, dict]:
     """
-    Download video using yt-dlp.
+    Stream a direct media URL straight to disk over HTTP, no yt-dlp
+    involved. Returns (downloaded_file_path, info_dict).
+    """
+    import httpx
+
+    info = _extract_direct_media_info(url)
+    file_id = uuid.uuid4().hex[:12]
+    ext = (
+        info["ext"]
+        if info["ext"]
+        in {"mp4", "webm", "mov", "mkv", "m4v", "avi", "mp3", "m4a", "wav", "ogg"}
+        else "mp4"
+    )
+    filepath = output_path / f"{file_id}.{ext}"
+
+    with httpx.Client(
+        follow_redirects=True, timeout=httpx.Timeout(30.0, read=None)
+    ) as client:
+        with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            with open(filepath, "wb") as f:
+                for chunk in resp.iter_bytes(chunk_size=1024 * 1024):
+                    f.write(chunk)
+
+    info["id"] = file_id
+    return filepath, info
+
+
+def _download_video(
+    url: str, output_path: Path, is_direct: bool = False
+) -> tuple[Path, dict]:
+    """
+    Download video, either directly (streamed HTTP) or via yt-dlp.
     Returns (downloaded_file_path, info_dict).
     """
+    if is_direct:
+        return _download_direct_media(url, output_path)
+
     # Use a temporary filename pattern
     temp_template = output_path / "%(id)s.%(ext)s"
 
@@ -467,15 +637,15 @@ async def fetch_url_info(
     """
     url = req.url.strip()
 
-    # Validate URL
-    error = _validate_url(url)
+    # Validate + classify URL (platform vs. direct media) in one pass
+    error, is_direct = _classify_url(url)
     if error:
         raise HTTPException(status_code=400, detail=error)
 
     try:
-        # Run yt-dlp info extraction in a thread to avoid blocking
+        # Run info extraction in a thread to avoid blocking
         loop = asyncio.get_event_loop()
-        info = await loop.run_in_executor(None, _extract_info, url)
+        info = await loop.run_in_executor(None, _extract_info, url, is_direct)
 
         return UrlInfoResponse(
             title=info["title"],
@@ -513,8 +683,8 @@ async def import_from_url(
     """
     url = req.url.strip()
 
-    # Validate URL
-    error = _validate_url(url)
+    # Validate + classify URL (platform vs. direct media) in one pass
+    error, is_direct = _classify_url(url)
     if error:
         raise HTTPException(status_code=400, detail=error)
 
@@ -526,10 +696,10 @@ async def import_from_url(
     try:
         loop = asyncio.get_event_loop()
 
-        logger.info(f"Starting download for URL: {url}")
+        logger.info(f"Starting download for URL: {url} (direct_media={is_direct})")
 
         # Extract info first (lightweight)
-        info = await loop.run_in_executor(None, _extract_info, url)
+        info = await loop.run_in_executor(None, _extract_info, url, is_direct)
         title = info["title"]
         duration = info["duration"]
         uploader = info["uploader"]
@@ -538,7 +708,7 @@ async def import_from_url(
 
         # Download the video (heavy operation, run in thread)
         download_path, download_info = await loop.run_in_executor(
-            None, _download_video, url, download_dir
+            None, _download_video, url, download_dir, is_direct
         )
 
         file_data = download_path.read_bytes()
@@ -549,10 +719,13 @@ async def import_from_url(
 
     except Exception as e:
         logger.error(f"Download failed for URL {url}: {e}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not download video from the provided URL. Error: {str(e)}",
+        detail = (
+            "YouTube blocked the download (bot detection). Try uploading YouTube "
+            "cookies via Settings, or wait and retry."
+            if not is_direct and "format" in str(e).lower()
+            else f"Could not download video from the provided URL. Error: {str(e)}"
         )
+        raise HTTPException(status_code=400, detail=detail)
 
     # ── Step 2: Create Job ────────────────────────────────────────────
     job_id = f"job_{uuid.uuid4().hex[:12]}"
