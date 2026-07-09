@@ -206,8 +206,9 @@ def _download_video(url: str, output_path: Path) -> tuple[Path, dict]:
     opts = {
         **_get_ytdlp_opts(),
         "outtmpl": str(temp_template),
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "format": "bv*+ba/b",
         "merge_output_format": "mp4",
+        "ignore_no_formats_error": True,
         "postprocessors": [
             {
                 "key": "FFmpegVideoConvertor",

@@ -6,7 +6,8 @@ import { Upload, Video, AlertCircle, CheckCircle2, Loader2, File, Link, Globe, P
 const ACCEPTED = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska'];
 const ACCEPTED_EXT = ['.mp4', '.mov', '.webm', '.mkv'];
 const MAX_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
+// Use relative API routes so requests go through Next.js (avoids CORS and timeout issues)
+const API_BASE = '';
 
 type ImportMode = 'file' | 'url';
 
@@ -105,7 +106,7 @@ export default function UploadPage() {
     setUrlInfo(null);
 
     try {
-      const res = await fetch(`${BACKEND_URL}/api/url-import/info`, {
+      const res = await fetch('/api/url-import/info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url.trim() }),
@@ -173,7 +174,7 @@ export default function UploadPage() {
         xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
       });
 
-      xhr.open('POST', `${BACKEND_URL}/api/upload`);
+      xhr.open('POST', '/api/upload');
       xhr.send(formData);
 
       const result = await uploadPromise;
@@ -184,7 +185,7 @@ export default function UploadPage() {
 
       // Step 2: Start the pipeline
       try {
-        const pipelineRes = await fetch(`${BACKEND_URL}/api/jobs/${jobId}/start-pipeline`);
+        const pipelineRes = await fetch(`/api/jobs/${jobId}/start-pipeline`);
         if (!pipelineRes.ok) {
           console.warn('Pipeline start returned non-OK, pipeline may still run via Inngest');
         }
@@ -217,7 +218,7 @@ export default function UploadPage() {
     setStatusMessage('Downloading video from URL...');
 
     try {
-      const res = await fetch(`${BACKEND_URL}/api/url-import`, {
+      const res = await fetch('/api/url-import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url.trim() }),
@@ -236,7 +237,7 @@ export default function UploadPage() {
 
       // Start pipeline
       try {
-        const pipelineRes = await fetch(`${BACKEND_URL}/api/jobs/${jobId}/start-pipeline`);
+        const pipelineRes = await fetch(`/api/jobs/${jobId}/start-pipeline`);
         if (!pipelineRes.ok) {
           console.warn('Pipeline start returned non-OK, pipeline may still run via Inngest');
         }
