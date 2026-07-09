@@ -101,14 +101,25 @@ def _cookies_path() -> Path:
     """
     Resolve the on-disk path for the YouTube cookies file.
 
-    No environment variable is required for this to work: it defaults to a
-    fixed location under the app's upload directory, which is itself
-    settings-page/DB configured. If a deployer still sets YT_DLP_COOKIES
-    (e.g. to point at a shared cookies file outside the data dir), that
-    takes precedence for backward compatibility.
+    The default location is under the app's upload directory
+    (UPLOAD_DIR/cookies/youtube_cookies.txt), which is where the
+    settings-page upload endpoint always writes cookies.
+
+    If the YT_DLP_COOKIES env var is set AND the file exists at that
+    location, it takes precedence for backward compatibility (e.g. a
+    manually-placed cookies file outside the data dir). If the env var
+    points to a non-existent file, we silently fall back to the default
+    path so that the settings page upload still works.
     """
     if settings.yt_dlp_cookies:
-        return Path(settings.yt_dlp_cookies)
+        env_path = Path(settings.yt_dlp_cookies)
+        if env_path.exists():
+            return env_path
+        logger.debug(
+            "YT_DLP_COOKIES=%s set but file not found, "
+            "falling back to upload-path default",
+            settings.yt_dlp_cookies,
+        )
     return settings.upload_path / "cookies" / "youtube_cookies.txt"
 
 
