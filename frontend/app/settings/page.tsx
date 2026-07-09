@@ -88,12 +88,12 @@ export default function SettingsPage() {
   // React 18+ pattern that avoids hydration mismatches AND ESLint errors.
   // The subscribe() returns a no-op because these values never change.
   const passkeyAvailable = useSyncExternalStore(
-    () => () => {},
+    () => () => { },
     () => typeof window !== 'undefined' && window.PublicKeyCredential !== undefined,
     () => null
   );
   const devicePlatform = useSyncExternalStore(
-    () => () => {},
+    () => () => { },
     () => typeof navigator !== 'undefined' ? navigator.platform || 'Unknown device' : 'Unknown device',
     () => 'Unknown device'
   );
@@ -145,7 +145,7 @@ export default function SettingsPage() {
     fetch('/api/auth/passkey/status')
       .then((res) => res.json())
       .then((data) => setEnrolled(Boolean(data.enrolled)))
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   // Redirect if not logged in — wait for session to resolve first
@@ -372,7 +372,9 @@ export default function SettingsPage() {
   // YouTube cookies state
   const [hasYtCookies, setHasYtCookies] = useState(false);
   const [ytCookiesSize, setYtCookiesSize] = useState(0);
+  const [ytCookiesUpdatedAt, setYtCookiesUpdatedAt] = useState<string | null>(null);
   const [ytCookiesUploading, setYtCookiesUploading] = useState(false);
+  const [ytCookiesRemoving, setYtCookiesRemoving] = useState(false);
   const [ytCookiesMsg, setYtCookiesMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Check YouTube cookies status on mount
@@ -382,9 +384,31 @@ export default function SettingsPage() {
       .then((data) => {
         setHasYtCookies(data.hasCookies);
         setYtCookiesSize(data.cookieSize);
+        setYtCookiesUpdatedAt(data.updatedAt ?? null);
       })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
+
+  async function handleYtCookiesRemove() {
+    setYtCookiesRemoving(true);
+    setYtCookiesMsg(null);
+    try {
+      const res = await fetch('/api/url-import/cookies', { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
+        setHasYtCookies(false);
+        setYtCookiesSize(0);
+        setYtCookiesUpdatedAt(null);
+        setYtCookiesMsg({ type: 'success', text: data.message || 'Cookies removed.' });
+      } else {
+        setYtCookiesMsg({ type: 'error', text: data.detail || 'Failed to remove cookies.' });
+      }
+    } catch (err) {
+      setYtCookiesMsg({ type: 'error', text: err instanceof Error ? err.message : 'Network error.' });
+    } finally {
+      setYtCookiesRemoving(false);
+    }
+  }
 
   async function handleYtCookiesUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -407,6 +431,7 @@ export default function SettingsPage() {
       if (res.ok) {
         setHasYtCookies(true);
         setYtCookiesSize(data.size);
+        setYtCookiesUpdatedAt(data.updatedAt ?? null);
         setYtCookiesMsg({ type: 'success', text: data.message || 'Cookies uploaded successfully.' });
       } else {
         setYtCookiesMsg({ type: 'error', text: data.detail || 'Failed to upload cookies.' });
@@ -526,11 +551,10 @@ export default function SettingsPage() {
               background: passkeyAvailable
                 ? 'rgba(16,185,129,0.1)'
                 : 'rgba(239,68,68,0.1)',
-              border: `1px solid ${
-                passkeyAvailable
-                  ? 'rgba(16,185,129,0.2)'
-                  : 'rgba(239,68,68,0.2)'
-              }`,
+              border: `1px solid ${passkeyAvailable
+                ? 'rgba(16,185,129,0.2)'
+                : 'rgba(239,68,68,0.2)'
+                }`,
             }}
           >
             {passkeyAvailable ? (
@@ -598,8 +622,8 @@ export default function SettingsPage() {
                 ? 'rgba(16,185,129,0.1)'
                 : 'rgba(239,68,68,0.1)',
               border: `1px solid ${message.type === 'success'
-                  ? 'rgba(16,185,129,0.2)'
-                  : 'rgba(239,68,68,0.2)'
+                ? 'rgba(16,185,129,0.2)'
+                : 'rgba(239,68,68,0.2)'
                 }`,
               color: message.type === 'success' ? 'var(--success)' : 'var(--danger)',
             }}
@@ -953,7 +977,7 @@ export default function SettingsPage() {
                     How to export cookies:
                   </p>
                   <ol className="list-decimal list-inside space-y-1">
-                    <li>Install the <strong>"Get cookies.txt LOCALLY"</strong> browser extension (Chrome / Firefox)</li>
+                    <li>Install the <strong>&quot;Get cookies.txt LOCALLY&quot;</strong> browser extension (Chrome / Firefox)</li>
                     <li>Sign in to <strong>youtube.com</strong> in your browser</li>
                     <li>Click the extension icon and export your cookies as <strong>cookies.txt</strong></li>
                     <li>Upload the exported file below</li>
@@ -974,13 +998,31 @@ export default function SettingsPage() {
                         className="w-4 h-4"
                         style={{ color: 'var(--success)' }}
                       />
-                      <span className="text-sm" style={{ color: 'var(--success)' }}>
-                        Cookies configured
-                      </span>
+                      <div className="flex flex-col">
+                        <span className="text-sm" style={{ color: 'var(--success)' }}>
+                          Cookies configured
+                        </span>
+                        {ytCookiesUpdatedAt && (
+                          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                            Updated {new Date(ytCookiesUpdatedAt).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      {ytCookiesSize.toLocaleString()} bytes
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {ytCookiesSize.toLocaleString()} bytes
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleYtCookiesRemove}
+                        disabled={ytCookiesRemoving}
+                        className="text-xs underline"
+                        style={{ color: 'var(--danger)' }}
+                      >
+                        {ytCookiesRemoving ? 'Removing…' : 'Remove'}
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -1038,8 +1080,8 @@ export default function SettingsPage() {
                         ? 'rgba(16,185,129,0.1)'
                         : 'rgba(239,68,68,0.1)',
                       border: `1px solid ${ytCookiesMsg.type === 'success'
-                          ? 'rgba(16,185,129,0.2)'
-                          : 'rgba(239,68,68,0.2)'
+                        ? 'rgba(16,185,129,0.2)'
+                        : 'rgba(239,68,68,0.2)'
                         }`,
                       color: ytCookiesMsg.type === 'success' ? 'var(--success)' : 'var(--danger)',
                     }}

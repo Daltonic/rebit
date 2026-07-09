@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import Job, PipelineStep, SiaLog
+from app.models import AppSettings, Job, PipelineStep, SiaLog
 from app.services import sia_client
 from app.services.pipeline_orchestrator import run_pipeline_async
 
@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["url-import"])
 
 # ── Request / Response Schemas ──────────────────────────────────────────
+
 
 class UrlImportRequest(BaseModel):
     url: str = Field(..., description="Video URL (YouTube, etc.)")
@@ -66,21 +67,50 @@ class CookiesStatusResponse(BaseModel):
     hasCookies: bool = Field(alias="hasCookies")
     cookiePath: str = Field(alias="cookiePath")
     cookieSize: int = Field(alias="cookieSize")
+    updatedAt: Optional[str] = Field(default=None, alias="updatedAt")
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 SUPPORTED_DOMAINS = {
-    "youtube.com", "youtu.be", "www.youtube.com",
-    "m.youtube.com", "music.youtube.com",
-    "vimeo.com", "www.vimeo.com",
-    "dailymotion.com", "www.dailymotion.com",
-    "tiktok.com", "www.tiktok.com",
-    "x.com", "twitter.com", "www.x.com", "www.twitter.com",
-    "instagram.com", "www.instagram.com",
-    "facebook.com", "www.facebook.com",
-    "reddit.com", "www.reddit.com",
+    "youtube.com",
+    "youtu.be",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "vimeo.com",
+    "www.vimeo.com",
+    "dailymotion.com",
+    "www.dailymotion.com",
+    "tiktok.com",
+    "www.tiktok.com",
+    "x.com",
+    "twitter.com",
+    "www.x.com",
+    "www.twitter.com",
+    "instagram.com",
+    "www.instagram.com",
+    "facebook.com",
+    "www.facebook.com",
+    "reddit.com",
+    "www.reddit.com",
 }
+
+
+def _cookies_path() -> Path:
+    """
+    Resolve the on-disk path for the YouTube cookies file.
+
+    No environment variable is required for this to work: it defaults to a
+    fixed location under the app's upload directory, which is itself
+    settings-page/DB configured. If a deployer still sets YT_DLP_COOKIES
+    (e.g. to point at a shared cookies file outside the data dir), that
+    takes precedence for backward compatibility.
+    """
+    if settings.yt_dlp_cookies:
+        return Path(settings.yt_dlp_cookies)
+    return settings.upload_path / "cookies" / "youtube_cookies.txt"
+
 
 def _get_ytdlp_opts() -> dict:
     """Build yt-dlp options, including cookies if configured."""
@@ -89,19 +119,28 @@ def _get_ytdlp_opts() -> dict:
         "no_warnings": True,
         "extract_flat": "discard",
     }
-    cookies_path = settings.yt_dlp_cookies
-    if cookies_path and Path(cookies_path).exists():
-        opts["cookiefile"] = cookies_path
-        logger.info(f"Using yt-dlp cookies from: {cookies_path}")
-    elif cookies_path:
-        logger.warning(f"yt-dlp cookies file not found: {cookies_path}")
+    cookie_path = _cookies_path()
+    if cookie_path.exists():
+        opts["cookiefile"] = str(cookie_path)
+        logger.info(f"Using yt-dlp cookies from: {cookie_path}")
     return opts
+
+
+async def _get_or_create_app_settings(db: AsyncSession) -> AppSettings:
+    result = await db.execute(select(AppSettings).where(AppSettings.id == "default"))
+    row = result.scalar_one_or_none()
+    if row is None:
+        row = AppSettings(id="default")
+        db.add(row)
+        await db.flush()
+    return row
 
 
 def _is_supported_url(url: str) -> bool:
     """Check if the URL is from a supported source."""
     try:
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
         # Strip port if present
@@ -145,7 +184,9 @@ def _extract_info(url: str) -> dict:
         return {
             "title": info.get("title", "Untitled"),
             "duration": info.get("duration"),
-            "uploader": info.get("uploader") or info.get("channel") or info.get("creator"),
+            "uploader": info.get("uploader")
+            or info.get("channel")
+            or info.get("creator"),
             "thumbnail": info.get("thumbnail"),
             "webpage_url": info.get("webpage_url") or url,
             "ext": info.get("ext", "mp4"),
@@ -165,10 +206,12 @@ def _download_video(url: str, output_path: Path) -> tuple[Path, dict]:
         "outtmpl": str(temp_template),
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "merge_output_format": "mp4",
-        "postprocessors": [{
-            "key": "FFmpegVideoConvertor",
-            "preferedformat": "mp4",
-        }],
+        "postprocessors": [
+            {
+                "key": "FFmpegVideoConvertor",
+                "preferedformat": "mp4",
+            }
+        ],
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -215,74 +258,94 @@ async def _upload_to_sia(
             except Exception as e:
                 logger.warning(f"Failed to pin Sia object {sia_object_id}: {e}")
 
-            db.add(SiaLog(
-                job_id=job_id,
-                step="sia_upload_source",
-                passed=True,
-                message=f"Source video uploaded to Sia: {sia_object_id}",
-            ))
+            db.add(
+                SiaLog(
+                    job_id=job_id,
+                    step="sia_upload_source",
+                    passed=True,
+                    message=f"Source video uploaded to Sia: {sia_object_id}",
+                )
+            )
 
-            logger.info(f"Source video uploaded to Sia for job {job_id}: {sia_object_id}")
-            return {"sia_object_id": sia_object_id, "sia_status": "ready", "demo": False}
+            logger.info(
+                f"Source video uploaded to Sia for job {job_id}: {sia_object_id}"
+            )
+            return {
+                "sia_object_id": sia_object_id,
+                "sia_status": "ready",
+                "demo": False,
+            }
 
         except Exception as e:
             error_msg = f"Sia upload failed: {str(e)}"
             logger.error(error_msg)
-            db.add(SiaLog(
-                job_id=job_id,
-                step="sia_upload_source",
-                passed=False,
-                message=error_msg,
-            ))
+            db.add(
+                SiaLog(
+                    job_id=job_id,
+                    step="sia_upload_source",
+                    passed=False,
+                    message=error_msg,
+                )
+            )
 
     # Demo mode fallback
     demo_hash = f"demo-sia-{job_id}"
-    db.add(SiaLog(
-        job_id=job_id,
-        step="sia_upload_source",
-        passed=True,
-        message=f"Demo: Source video stored with hash {demo_hash}",
-    ))
+    db.add(
+        SiaLog(
+            job_id=job_id,
+            step="sia_upload_source",
+            passed=True,
+            message=f"Demo: Source video stored with hash {demo_hash}",
+        )
+    )
     logger.info(f"Demo Sia upload for job {job_id}: {demo_hash}")
     return {"sia_object_id": demo_hash, "sia_status": "ready", "demo": True}
 
 
 # ── Cookies Endpoints ───────────────────────────────────────────────────
 
+
 @router.get("/url-import/cookies")
-async def get_cookies_status():
+async def get_cookies_status(db: AsyncSession = Depends(get_db)):
     """
     GET /api/url-import/cookies
 
-    Check whether YouTube cookies have been uploaded and are valid.
-    Returns the status, path, and size of the cookies file.
+    Check whether YouTube cookies have been configured and are valid.
+    Works purely off the DB + a default on-disk path — no env var needed.
     """
-    cookie_path = Path(settings.yt_dlp_cookies) if settings.yt_dlp_cookies else None
-    exists = cookie_path is not None and cookie_path.exists()
+    cookie_path = _cookies_path()
+    exists = cookie_path.exists()
     size = cookie_path.stat().st_size if exists else 0
+
+    updated_at = None
+    if exists:
+        app_settings = await _get_or_create_app_settings(db)
+        if app_settings.youtube_cookies_updated_at:
+            updated_at = app_settings.youtube_cookies_updated_at.isoformat()
 
     return CookiesStatusResponse(
         hasCookies=exists,
-        cookiePath=str(cookie_path) if cookie_path else "",
+        cookiePath=str(cookie_path),
         cookieSize=size,
+        updatedAt=updated_at,
     )
 
 
 @router.post("/url-import/cookies")
-async def upload_cookies(file: UploadFile = File(...)):
+async def upload_cookies(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
     """
     POST /api/url-import/cookies
 
-    Upload a cookies.txt file exported from the browser.
-    Saves it to the path configured in YT_DLP_COOKIES.
+    Upload a cookies.txt file exported from the browser (e.g. via the
+    "Get cookies.txt LOCALLY" extension). Saved to a default on-disk path
+    derived from the app's upload directory — nothing to configure via env
+    vars first. Metadata (size, timestamp) is persisted to AppSettings so
+    the settings page can show status without touching the filesystem.
     """
-    if not settings.yt_dlp_cookies:
-        raise HTTPException(
-            status_code=500,
-            detail="YT_DLP_COOKIES path is not configured in the server backend.",
-        )
-
-    cookie_path = Path(settings.yt_dlp_cookies)
+    cookie_path = _cookies_path()
 
     # Validate the uploaded file looks like a Netscape cookies file
     content = await file.read()
@@ -292,31 +355,61 @@ async def upload_cookies(file: UploadFile = File(...)):
     decoded = content.decode("utf-8", errors="replace")
 
     # Check that it looks like a valid cookies file (Netscape format)
-    if not any(line.strip().startswith((".youtube.com", "youtube.com", ".google.com", "#")) for line in decoded.splitlines()):
+    if not any(
+        line.strip().startswith((".youtube.com", "youtube.com", ".google.com", "#"))
+        for line in decoded.splitlines()
+    ):
         # It might still be valid — let a few lines through, but warn if totally unrecognizable
         first_line = decoded.splitlines()[0] if decoded.splitlines() else ""
         if not first_line.startswith("#") and "youtube" not in decoded.lower():
             raise HTTPException(
                 status_code=400,
                 detail="The uploaded file does not appear to be a valid cookies.txt file. "
-                       "Export from your browser using the 'Get cookies.txt LOCALLY' extension.",
+                "Export from your browser using the 'Get cookies.txt LOCALLY' extension.",
             )
 
-    # Ensure parent directory exists
+    # Ensure parent directory exists and write the cookies file
     cookie_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write the cookies file
     cookie_path.write_bytes(content)
+    cookie_path.chmod(0o600)
     logger.info(f"YouTube cookies uploaded ({len(content)} bytes) to {cookie_path}")
+
+    now = datetime.now(timezone.utc)
+    app_settings = await _get_or_create_app_settings(db)
+    app_settings.youtube_cookies_size = len(content)
+    app_settings.youtube_cookies_updated_at = now
+    await db.commit()
 
     return {
         "ok": True,
         "message": f"Cookies saved ({len(content)} bytes).",
         "size": len(content),
+        "updatedAt": now.isoformat(),
     }
 
 
+@router.delete("/url-import/cookies")
+async def delete_cookies(db: AsyncSession = Depends(get_db)):
+    """
+    DELETE /api/url-import/cookies
+
+    Remove the stored cookies file and clear its DB metadata.
+    """
+    cookie_path = _cookies_path()
+    if cookie_path.exists():
+        cookie_path.unlink()
+        logger.info(f"YouTube cookies removed: {cookie_path}")
+
+    app_settings = await _get_or_create_app_settings(db)
+    app_settings.youtube_cookies_size = None
+    app_settings.youtube_cookies_updated_at = None
+    await db.commit()
+
+    return {"ok": True, "message": "Cookies removed."}
+
+
 # ── URL Import Endpoints ────────────────────────────────────────────────
+
 
 @router.post("/url-import/info")
 async def fetch_url_info(
@@ -434,14 +527,16 @@ async def import_from_url(
     )
     db.add(job)
 
-    db.add(PipelineStep(
-        job_id=job_id,
-        stage="sia_upload",
-        status="running",
-        progress_pct=10,
-        message="Uploading source video to Sia Network...",
-        started_at=now,
-    ))
+    db.add(
+        PipelineStep(
+            job_id=job_id,
+            stage="sia_upload",
+            status="running",
+            progress_pct=10,
+            message="Uploading source video to Sia Network...",
+            started_at=now,
+        )
+    )
 
     await db.flush()
     logger.info(f"Job {job_id} created for URL import: '{title}' ({file_size} bytes)")
@@ -464,11 +559,15 @@ async def import_from_url(
         if step:
             step.status = "complete"
             step.progress_pct = 100
-            step.message = f"Source video stored on Sia: {sia_result['sia_object_id'][:16]}..."
+            step.message = (
+                f"Source video stored on Sia: {sia_result['sia_object_id'][:16]}..."
+            )
             step.completed_at = datetime.now(timezone.utc)
 
         await db.flush()
-        logger.info(f"Sia upload complete for job {job_id}: {sia_result['sia_object_id']}")
+        logger.info(
+            f"Sia upload complete for job {job_id}: {sia_result['sia_object_id']}"
+        )
 
     except Exception as e:
         logger.error(f"Sia upload failed for job {job_id}: {e}")
@@ -505,13 +604,15 @@ async def import_from_url(
     job.status = "uploaded"
     job.updated_at = datetime.now(timezone.utc)
 
-    db.add(PipelineStep(
-        job_id=job_id,
-        stage="transcribe",
-        status="pending",
-        progress_pct=0,
-        message="Waiting for transcription...",
-    ))
+    db.add(
+        PipelineStep(
+            job_id=job_id,
+            stage="transcribe",
+            status="pending",
+            progress_pct=0,
+            message="Waiting for transcription...",
+        )
+    )
 
     await db.commit()
 
