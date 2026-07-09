@@ -123,20 +123,53 @@ def _cookies_path() -> Path:
     return settings.upload_path / "cookies" / "youtube_cookies.txt"
 
 
-def _get_ytdlp_opts() -> dict:
+class _YtdlpDiagnosticLogger:
+    """
+    Captures yt-dlp's internal debug/warning/error lines so we can surface
+    the *real* reason a download failed (e.g. "PO Token Providers: none
+    available") instead of just the generic "No video formats found!"
+    exception message.
+    """
+
+    def __init__(self):
+        self.lines: list[str] = []
+
+    def debug(self, msg):
+        self.lines.append(str(msg))
+
+    def info(self, msg):
+        self.lines.append(str(msg))
+
+    def warning(self, msg):
+        self.lines.append(f"WARNING: {msg}")
+
+    def error(self, msg):
+        self.lines.append(f"ERROR: {msg}")
+
+    def pot_diagnostics(self) -> Optional[str]:
+        """Pull out any PO-token-related lines, which are the most useful
+        signal when format resolution fails."""
+        pot_lines = [
+            l for l in self.lines if "pot" in l.lower() or "po token" in l.lower()
+        ]
+        return "; ".join(pot_lines[-5:]) if pot_lines else None
+
+
+def _get_ytdlp_opts(
+    diagnostic_logger: Optional["_YtdlpDiagnosticLogger"] = None,
+) -> dict:
     """Build yt-dlp options, including cookies if configured."""
-    # YouTube has ramped up bot detection over the last few months. The
-    # `android`/`ios` clients now frequently get skipped by yt-dlp itself
-    # (they require a PO token or get a 403 mid-negotiation), which is
-    # what produces "No video formats found!" even though `web`-based
-    # info extraction succeeds. `tv` is currently the most reliable
-    # client that doesn't require a PO token for most videos, so we lead
-    # with that and fall back to the others. We also stopped skipping
-    # the webpage — skipping it was preventing yt-dlp from picking up
-    # signature/n-challenge data some clients need to resolve formats.
+    # YouTube now requires a PO (Proof-of-Origin) token for GVS/streaming
+    # requests on essentially every client — cookies alone no longer get
+    # you past format resolution. We point yt-dlp at a bgutil-ytdlp-pot-
+    # provider instance (a small companion service, see docker-compose)
+    # which mints tokens on demand. Without it configured, YouTube imports
+    # will continue to intermittently (or entirely) fail with "No video
+    # formats found!" regardless of cookies or player_client tricks.
     opts = {
         "quiet": True,
         "no_warnings": True,
+        "verbose": True,  # required so our diagnostic logger sees PO token status lines
         "format": "bv*+ba/b/best",
         "ignore_no_formats_error": True,
         "retries": 5,
@@ -162,15 +195,20 @@ def _get_ytdlp_opts() -> dict:
             },
         },
     }
+
+    if settings.pot_provider_base_url:
+        opts["extractor_args"]["youtubepot-bgutilhttp"] = {
+            "base_url": [settings.pot_provider_base_url],
+        }
+
+    if diagnostic_logger is not None:
+        opts["logger"] = diagnostic_logger
+
     cookie_path = _cookies_path()
     if cookie_path.exists():
         opts["cookiefile"] = str(cookie_path)
         logger.info(f"Using yt-dlp cookies from: {cookie_path}")
     else:
-        # Cookies are the single biggest reliability lever for YouTube.
-        # Without them, even the "tv" client trick will eventually get
-        # rate-limited or blocked again as YouTube rolls out new
-        # fingerprinting. Log this so it shows up during debugging.
         logger.info(
             "No YouTube cookies configured — uploading a cookies.txt via "
             "POST /api/url-import/cookies significantly improves reliability."
@@ -355,19 +393,26 @@ def _extract_info(url: str, is_direct: bool = False) -> dict:
     if is_direct:
         return _extract_direct_media_info(url)
 
-    opts = _get_ytdlp_opts()
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        return {
-            "title": info.get("title", "Untitled"),
-            "duration": info.get("duration"),
-            "uploader": info.get("uploader")
-            or info.get("channel")
-            or info.get("creator"),
-            "thumbnail": info.get("thumbnail"),
-            "webpage_url": info.get("webpage_url") or url,
-            "ext": info.get("ext", "mp4"),
-        }
+    diag = _YtdlpDiagnosticLogger()
+    opts = _get_ytdlp_opts(diagnostic_logger=diag)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return {
+                "title": info.get("title", "Untitled"),
+                "duration": info.get("duration"),
+                "uploader": info.get("uploader")
+                or info.get("channel")
+                or info.get("creator"),
+                "thumbnail": info.get("thumbnail"),
+                "webpage_url": info.get("webpage_url") or url,
+                "ext": info.get("ext", "mp4"),
+            }
+    except Exception as e:
+        pot_info = diag.pot_diagnostics()
+        if pot_info:
+            raise RuntimeError(f"{e} | PO token diagnostics: {pot_info}") from e
+        raise
 
 
 def _download_direct_media(url: str, output_path: Path) -> tuple[Path, dict]:
@@ -413,8 +458,9 @@ def _download_video(
     # Use a temporary filename pattern
     temp_template = output_path / "%(id)s.%(ext)s"
 
+    diag = _YtdlpDiagnosticLogger()
     opts = {
-        **_get_ytdlp_opts(),
+        **_get_ytdlp_opts(diagnostic_logger=diag),
         "outtmpl": str(temp_template),
         "format": "bv*+ba/b",
         "merge_output_format": "mp4",
@@ -427,22 +473,33 @@ def _download_video(
         ],
     }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        # Determine the actual file path
-        video_id = info.get("id", uuid.uuid4().hex[:12])
-        ext = "mp4"  # We force mp4 via merge_output_format
-        filename = f"{video_id}.{ext}"
-        filepath = output_path / filename
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            # Determine the actual file path
+            video_id = info.get("id", uuid.uuid4().hex[:12])
+            ext = "mp4"  # We force mp4 via merge_output_format
+            filename = f"{video_id}.{ext}"
+            filepath = output_path / filename
 
-        # If yt-dlp created the file with a different extension, find it
-        if not filepath.exists():
-            for f in output_path.iterdir():
-                if f.stem == video_id and f.suffix in (".mp4", ".mkv", ".webm", ".mov"):
-                    filepath = f
-                    break
+            # If yt-dlp created the file with a different extension, find it
+            if not filepath.exists():
+                for f in output_path.iterdir():
+                    if f.stem == video_id and f.suffix in (
+                        ".mp4",
+                        ".mkv",
+                        ".webm",
+                        ".mov",
+                    ):
+                        filepath = f
+                        break
 
-        return filepath, info
+            return filepath, info
+    except Exception as e:
+        pot_info = diag.pot_diagnostics()
+        if pot_info:
+            raise RuntimeError(f"{e} | PO token diagnostics: {pot_info}") from e
+        raise
 
 
 async def _upload_to_sia(
@@ -731,31 +788,47 @@ async def import_from_url(
     job_id = f"job_{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc)
 
-    job = Job(
-        id=job_id,
-        status="uploading",
-        source_filename=filename,
-        source_url=url,
-        duration_seconds=duration,
-        sia_status="pending",
-        created_at=now,
-        updated_at=now,
-    )
-    db.add(job)
-
-    db.add(
-        PipelineStep(
-            job_id=job_id,
-            stage="sia_upload",
-            status="running",
-            progress_pct=10,
-            message="Uploading source video to Sia Network...",
-            started_at=now,
+    try:
+        job = Job(
+            id=job_id,
+            status="uploading",
+            source_filename=filename,
+            source_url=url,
+            duration_seconds=duration,
+            sia_status="pending",
+            created_at=now,
+            updated_at=now,
         )
-    )
+        db.add(job)
 
-    await db.flush()
-    logger.info(f"Job {job_id} created for URL import: '{title}' ({file_size} bytes)")
+        db.add(
+            PipelineStep(
+                job_id=job_id,
+                stage="sia_upload",
+                status="running",
+                progress_pct=10,
+                message="Uploading source video to Sia Network...",
+                started_at=now,
+            )
+        )
+
+        await db.flush()
+        logger.info(
+            f"Job {job_id} created for URL import: '{title}' ({file_size} bytes)"
+        )
+    except Exception as e:
+        # NOTE: a DatatypeMismatchError here ("column is of type JobStatus
+        # but expression is of type character varying") means the Job.status
+        # / PipelineStep.status columns are SQLAlchemy String columns but the
+        # actual Postgres columns are native enum types. That's a model/
+        # migration mismatch, not something we can safely work around here
+        # (guessing at enum values could write bad data). See app/models.py.
+        await db.rollback()
+        logger.error(f"Failed to create job record for URL {url}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not create the job record after downloading the video. Error: {str(e)}",
+        )
 
     # ── Step 3: Upload to Sia ─────────────────────────────────────────
     try:
@@ -830,7 +903,15 @@ async def import_from_url(
         )
     )
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to finalize job {job_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Video was downloaded and stored, but the job record could not be finalized. Error: {str(e)}",
+        )
 
     # Trigger pipeline in background
     asyncio.create_task(run_pipeline_async(job_id))

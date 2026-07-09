@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     # yt-dlp cookies
     yt_dlp_cookies: str = ""
 
+    # PO Token provider (bgutil-ytdlp-pot-provider) — required for YouTube
+    # downloads as of mid-2026. Points at the companion service's HTTP API,
+    # e.g. "http://bgutil-pot:4416" when running via docker-compose, or
+    # "http://127.0.0.1:4416" for local dev. Leave empty to disable (YouTube
+    # downloads will then fail with "No video formats found!").
+    pot_provider_base_url: str = ""
+
     model_config = {
         "env_prefix": "",
         "case_sensitive": False,
