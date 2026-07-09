@@ -13,6 +13,7 @@ enum JobStatus {
   extracting
   rendering
   storing
+  uploaded
   complete
   failed
 }

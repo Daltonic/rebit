@@ -69,6 +69,7 @@ class Job(Base):
             "extracting",
             "rendering",
             "storing",
+            "uploaded",
             "complete",
             "failed",
             name="JobStatus",
@@ -113,7 +114,7 @@ class Job(Base):
 class Transcript(Base):
     __tablename__ = "transcripts"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
     job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"), unique=True)
     vtt_content: Mapped[str] = mapped_column(Text)
     json_content: Mapped[dict] = mapped_column(JSON)
@@ -128,7 +129,7 @@ class Transcript(Base):
 class Segment(Base):
     __tablename__ = "segments"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
     job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"))
     start_seconds: Mapped[float] = mapped_column(Float)
     end_seconds: Mapped[float] = mapped_column(Float)
@@ -158,7 +159,7 @@ class Segment(Base):
 class PipelineStep(Base):
     __tablename__ = "pipeline_steps"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
     job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"))
     stage: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(
@@ -183,7 +184,7 @@ class PipelineStep(Base):
 class SiaLog(Base):
     __tablename__ = "sia_logs"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
     job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"))
     step: Mapped[str] = mapped_column(String)
     passed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
