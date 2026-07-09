@@ -115,9 +115,8 @@ def _cookies_path() -> Path:
 def _get_ytdlp_opts() -> dict:
     """Build yt-dlp options, including cookies if configured."""
     # Use a common browser User-Agent to avoid YouTube bot detection.
-    # We do NOT use extract_flat=discard here because it can interfere with
-    # format extraction on some YouTube videos — instead, the info endpoint
-    # passes that option only when needed (fetching metadata without formats).
+    # We do NOT force player clients or extractor args — let yt-dlp's
+    # regularly-updated defaults handle YouTube's anti-bot measures.
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -131,12 +130,6 @@ def _get_ytdlp_opts() -> dict:
             ),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-        },
-        "extractor_args": {
-            "youtube": {
-                "skip": ["dash", "hls"],
-                "player_client": ["android", "web"],
-            },
         },
     }
     cookie_path = _cookies_path()
