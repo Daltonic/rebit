@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Pipeline
     max_upload_size_mb: int = 0
 
+    # yt-dlp cookies
+    yt_dlp_cookies: str = ""
+
     model_config = {
         "env_prefix": "",
         "case_sensitive": False,

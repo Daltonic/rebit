@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 import yt_dlp
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,6 +62,12 @@ class UrlInfoResponse(BaseModel):
     isValid: bool = Field(alias="isValid")
 
 
+class CookiesStatusResponse(BaseModel):
+    hasCookies: bool = Field(alias="hasCookies")
+    cookiePath: str = Field(alias="cookiePath")
+    cookieSize: int = Field(alias="cookieSize")
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 SUPPORTED_DOMAINS = {
@@ -76,11 +82,20 @@ SUPPORTED_DOMAINS = {
     "reddit.com", "www.reddit.com",
 }
 
-YTDLP_OPTIONS = {
-    "quiet": True,
-    "no_warnings": True,
-    "extract_flat": "discard",
-}
+def _get_ytdlp_opts() -> dict:
+    """Build yt-dlp options, including cookies if configured."""
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": "discard",
+    }
+    cookies_path = settings.yt_dlp_cookies
+    if cookies_path and Path(cookies_path).exists():
+        opts["cookiefile"] = cookies_path
+        logger.info(f"Using yt-dlp cookies from: {cookies_path}")
+    elif cookies_path:
+        logger.warning(f"yt-dlp cookies file not found: {cookies_path}")
+    return opts
 
 
 def _is_supported_url(url: str) -> bool:
@@ -124,7 +139,7 @@ def _validate_url(url: str) -> Optional[str]:
 
 def _extract_info(url: str) -> dict:
     """Extract video info using yt-dlp."""
-    opts = {**YTDLP_OPTIONS}
+    opts = _get_ytdlp_opts()
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
         return {
@@ -146,7 +161,7 @@ def _download_video(url: str, output_path: Path) -> tuple[Path, dict]:
     temp_template = output_path / "%(id)s.%(ext)s"
 
     opts = {
-        **YTDLP_OPTIONS,
+        **_get_ytdlp_opts(),
         "outtmpl": str(temp_template),
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "merge_output_format": "mp4",
@@ -232,7 +247,76 @@ async def _upload_to_sia(
     return {"sia_object_id": demo_hash, "sia_status": "ready", "demo": True}
 
 
-# ── Endpoints ───────────────────────────────────────────────────────────
+# ── Cookies Endpoints ───────────────────────────────────────────────────
+
+@router.get("/url-import/cookies")
+async def get_cookies_status():
+    """
+    GET /api/url-import/cookies
+
+    Check whether YouTube cookies have been uploaded and are valid.
+    Returns the status, path, and size of the cookies file.
+    """
+    cookie_path = Path(settings.yt_dlp_cookies) if settings.yt_dlp_cookies else None
+    exists = cookie_path is not None and cookie_path.exists()
+    size = cookie_path.stat().st_size if exists else 0
+
+    return CookiesStatusResponse(
+        hasCookies=exists,
+        cookiePath=str(cookie_path) if cookie_path else "",
+        cookieSize=size,
+    )
+
+
+@router.post("/url-import/cookies")
+async def upload_cookies(file: UploadFile = File(...)):
+    """
+    POST /api/url-import/cookies
+
+    Upload a cookies.txt file exported from the browser.
+    Saves it to the path configured in YT_DLP_COOKIES.
+    """
+    if not settings.yt_dlp_cookies:
+        raise HTTPException(
+            status_code=500,
+            detail="YT_DLP_COOKIES path is not configured in the server backend.",
+        )
+
+    cookie_path = Path(settings.yt_dlp_cookies)
+
+    # Validate the uploaded file looks like a Netscape cookies file
+    content = await file.read()
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="Uploaded cookies file is empty.")
+
+    decoded = content.decode("utf-8", errors="replace")
+
+    # Check that it looks like a valid cookies file (Netscape format)
+    if not any(line.strip().startswith((".youtube.com", "youtube.com", ".google.com", "#")) for line in decoded.splitlines()):
+        # It might still be valid — let a few lines through, but warn if totally unrecognizable
+        first_line = decoded.splitlines()[0] if decoded.splitlines() else ""
+        if not first_line.startswith("#") and "youtube" not in decoded.lower():
+            raise HTTPException(
+                status_code=400,
+                detail="The uploaded file does not appear to be a valid cookies.txt file. "
+                       "Export from your browser using the 'Get cookies.txt LOCALLY' extension.",
+            )
+
+    # Ensure parent directory exists
+    cookie_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write the cookies file
+    cookie_path.write_bytes(content)
+    logger.info(f"YouTube cookies uploaded ({len(content)} bytes) to {cookie_path}")
+
+    return {
+        "ok": True,
+        "message": f"Cookies saved ({len(content)} bytes).",
+        "size": len(content),
+    }
+
+
+# ── URL Import Endpoints ────────────────────────────────────────────────
 
 @router.post("/url-import/info")
 async def fetch_url_info(
