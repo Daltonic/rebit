@@ -14,6 +14,7 @@ from typing import Optional
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Enum as SAEnum,
     Float,
     ForeignKey,
     Integer,
@@ -60,14 +61,40 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    status: Mapped[str] = mapped_column(String, default="uploading")
+    status: Mapped[str] = mapped_column(
+        SAEnum(
+            "uploading",
+            "transcribing",
+            "detecting",
+            "extracting",
+            "rendering",
+            "storing",
+            "complete",
+            "failed",
+            name="JobStatus",
+            create_type=False,
+        ),
+        default="uploading",
+    )
     source_filename: Mapped[str] = mapped_column(String)
     source_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     source_sia_object_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sia_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     indexd_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    sia_status: Mapped[str] = mapped_column(String, default="pending")
+    sia_status: Mapped[str] = mapped_column(
+        SAEnum(
+            "pending",
+            "queued",
+            "uploading",
+            "pinning",
+            "ready",
+            "failed",
+            name="SiaStatus",
+            create_type=False,
+        ),
+        default="pending",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -109,7 +136,16 @@ class Segment(Base):
     virality_score: Mapped[int] = mapped_column(Integer)
     emotional_signal: Mapped[str] = mapped_column(String)
     transcript_excerpt: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String, default="pending")
+    status: Mapped[str] = mapped_column(
+        SAEnum(
+            "pending",
+            "approved",
+            "rejected",
+            name="SegmentStatus",
+            create_type=False,
+        ),
+        default="pending",
+    )
     clip_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     sia_object_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -125,7 +161,17 @@ class PipelineStep(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"))
     stage: Mapped[str] = mapped_column(String)
-    status: Mapped[str] = mapped_column(String, default="pending")
+    status: Mapped[str] = mapped_column(
+        SAEnum(
+            "pending",
+            "running",
+            "complete",
+            "failed",
+            name="StageStatus",
+            create_type=False,
+        ),
+        default="pending",
+    )
     progress_pct: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[str] = mapped_column(String, default="")
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
