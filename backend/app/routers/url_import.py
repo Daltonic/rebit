@@ -90,34 +90,127 @@ def _has_direct_media_extension(url: str) -> bool:
         return False
 
 
+def _get_media_type_from_url_params(url: str) -> Optional[str]:
+    """
+    Check URL query parameters for a known media-type indicator.
+    Some CDNs (e.g., Google Video, CloudFront, Akamai) embed the MIME type
+    as a query parameter like ?mime=video/mp4 or ?format=mp4.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    try:
+        params = parse_qs(urlparse(url).query)
+    except Exception:
+        return None
+
+    # Check for explicit mime/content-type parameter
+    for param in ("mime", "content-type", "content_type", "type", "mediatype"):
+        values = params.get(param, [])
+        for val in values:
+            val = val.lower()
+            if val.startswith("video/") or val.startswith("audio/"):
+                return val
+
+    # Check for format parameter that maps to known video/audio extensions
+    format_param = params.get("format", [None])[0]
+    if format_param:
+        fmt = format_param.lower().strip(" .")
+        ext_to_type = {
+            "mp4": "video/mp4",
+            "webm": "video/webm",
+            "mov": "video/quicktime",
+            "mkv": "video/x-matroska",
+            "m4v": "video/mp4",
+            "avi": "video/x-msvideo",
+            "mp3": "audio/mpeg",
+            "m4a": "audio/mp4",
+            "wav": "audio/wav",
+            "ogg": "audio/ogg",
+        }
+        if fmt in ext_to_type:
+            return ext_to_type[fmt]
+
+    return None
+
+
+def _probe_content_type(url: str) -> Optional[str]:
+    """
+    Probes a URL to detect its Content-Type via HTTP.
+    Uses multiple strategies to handle various CDN behaviours:
+      1. HEAD with limited redirect following (check each step)
+      2. Ranged GET (bytes=0-0) — many servers reject HEAD but serve ranged GETs
+      3. Initial 302/301 redirect response headers (some embed Content-Type there)
+    """
+    import httpx
+
+    # ── Strategy 1: HEAD request, check each redirect's headers ──────
+    try:
+        with httpx.Client(follow_redirects=False, timeout=8.0) as client:
+            resp = client.head(url)
+            # Check every response in the redirect chain
+            for redirect_resp in resp.history:
+                ct = redirect_resp.headers.get("content-type", "").lower()
+                if ct.startswith("video/") or ct.startswith("audio/"):
+                    return ct
+            # Also check the final response
+            ct = resp.headers.get("content-type", "").lower()
+            if ct.startswith("video/") or ct.startswith("audio/"):
+                return ct
+    except Exception:
+        pass
+
+    # ── Strategy 2: Ranged GET (bytes=0-0) ──────────────────────────
+    # Some CDNs reject HEAD but serve ranged GETs with Content-Type.
+    try:
+        with httpx.Client(follow_redirects=True, timeout=10.0) as client:
+            resp = client.get(url, headers={"Range": "bytes=0-0"})
+            ct = resp.headers.get("content-type", "").lower()
+            if ct.startswith("video/") or ct.startswith("audio/"):
+                return ct
+    except Exception:
+        pass
+
+    # ── Strategy 3: Full GET, stream only the first chunk ───────────
+    # Some servers only set Content-Type on actual content delivery.
+    try:
+        with httpx.Client(
+            follow_redirects=True, timeout=10.0
+        ) as client:
+            with client.stream("GET", url) as resp:
+                ct = resp.headers.get("content-type", "").lower()
+                if ct.startswith("video/") or ct.startswith("audio/"):
+                    return ct
+                # Read a tiny bit to force headers from chunked responses
+                for _ in resp.iter_bytes(chunk_size=1):
+                    break
+                # Check again after reading (some servers send ct with data)
+                ct = resp.headers.get("content-type", "").lower()
+                if ct.startswith("video/") or ct.startswith("audio/"):
+                    return ct
+    except Exception:
+        pass
+
+    return None
+
+
 def _looks_like_direct_media(url: str) -> bool:
     """
     Determine whether a URL points directly at a media file.
-    Tries a cheap extension check first, then falls back to a HEAD request
-    and inspects Content-Type.
+    Strategy (in order of cost):
+      1. Cheap extension check on the URL path
+      2. Check URL query parameters for MIME type indicators
+      3. HTTP probe (HEAD with multi-strategy fallback)
     """
     if _has_direct_media_extension(url):
         return True
 
-    try:
-        import httpx
+    media_type = _get_media_type_from_url_params(url)
+    if media_type is not None:
+        return True
 
-        with httpx.Client(follow_redirects=True, timeout=8.0) as client:
-            resp = client.head(url)
-            content_type = resp.headers.get("content-type", "").lower()
-            if content_type.startswith("video/") or content_type.startswith("audio/"):
-                return True
-            # Some CDNs don't respond well to HEAD (405/403) — retry with a
-            # ranged GET so we don't download the whole file just to check.
-            if resp.status_code in (405, 403, 501):
-                resp = client.get(url, headers={"Range": "bytes=0-0"})
-                content_type = resp.headers.get("content-type", "").lower()
-                if content_type.startswith("video/") or content_type.startswith(
-                    "audio/"
-                ):
-                    return True
-    except Exception as e:
-        logger.debug(f"Content-Type probe failed for {url}: {e}")
+    media_type = _probe_content_type(url)
+    if media_type is not None:
+        return True
 
     return False
 
@@ -151,13 +244,62 @@ def _extract_direct_media_info(url: str) -> dict:
     Build an info dict for a direct media URL.
     Duration is left as None — the pipeline's transcription/analysis step
     will pick it up from the file itself once downloaded.
-    """
-    from urllib.parse import unquote, urlparse
 
-    path = urlparse(url).path
-    filename = unquote(path.rsplit("/", 1)[-1]) or "video"
-    title = filename.rsplit(".", 1)[0] if "." in filename else filename
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "mp4"
+    For extensionless URLs (e.g., CDN streaming URLs), we extract metadata
+    from query parameters like ?title=...&mime=video%2Fmp4.
+    """
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    path = parsed.path
+
+    # ── Try to get a meaningful title ─────────────────────────────────
+    title = None
+    if "title" in params:
+        title = unquote(params["title"][0])
+    if not title:
+        filename = unquote(path.rsplit("/", 1)[-1]) if path else None
+        if filename and filename != "videoplayback" and "." in filename:
+            title = filename.rsplit(".", 1)[0]
+        elif filename and filename != "videoplayback":
+            title = filename
+    if not title:
+        # Fall back to a readable name from the domain + truncated path
+        domain = parsed.netloc.replace("www.", "")
+        path_part = path.strip("/").replace("/", "-") if path else "video"
+        title = f"{domain}-{path_part}" if path_part else domain
+
+    # ── Determine extension ───────────────────────────────────────────
+    ext = "mp4"  # default fallback
+    if "." in path:
+        path_ext = path.rsplit(".", 1)[-1].lower()
+        if path_ext in {e.lstrip(".") for e in DIRECT_MEDIA_EXTENSIONS}:
+            ext = path_ext
+
+    # Check query param for MIME type to guess extension
+    if not ext:
+        media_type = _get_media_type_from_url_params(url)
+        if media_type:
+            mime_to_ext = {
+                "video/mp4": "mp4",
+                "video/webm": "webm",
+                "video/quicktime": "mov",
+                "video/x-matroska": "mkv",
+                "video/x-msvideo": "avi",
+                "audio/mpeg": "mp3",
+                "audio/mp4": "m4a",
+                "audio/wav": "wav",
+                "audio/ogg": "ogg",
+            }
+            ext = mime_to_ext.get(media_type, "mp4")
+
+    # ── Clean up title (remove excessive truncation markers) ──────────
+    if title:
+        title = title.replace("+", " ").strip()
+        # Truncate overly long titles (some CDNs embed long params)
+        if len(title) > 120:
+            title = title[:120].rsplit(" ", 1)[0]
 
     return {
         "title": title or "Untitled",
