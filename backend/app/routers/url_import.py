@@ -60,6 +60,7 @@ class UrlInfoResponse(BaseModel):
     thumbnail: Optional[str] = None
     webpageUrl: str = Field(alias="webpageUrl")
     isValid: bool = Field(alias="isValid")
+    warning: Optional[str] = None
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -173,9 +174,7 @@ def _probe_content_type(url: str) -> Optional[str]:
     # ── Strategy 3: Full GET, stream only the first chunk ───────────
     # Some servers only set Content-Type on actual content delivery.
     try:
-        with httpx.Client(
-            follow_redirects=True, timeout=10.0
-        ) as client:
+        with httpx.Client(follow_redirects=True, timeout=10.0) as client:
             with client.stream("GET", url) as resp:
                 ct = resp.headers.get("content-type", "").lower()
                 if ct.startswith("video/") or ct.startswith("audio/"):
@@ -191,6 +190,47 @@ def _probe_content_type(url: str) -> Optional[str]:
         pass
 
     return None
+
+
+def _is_session_bound_cdn_url(url: str) -> bool:
+    """
+    Detect CDN URLs that are locked to the browser session that generated
+    them — most notably YouTube's googlevideo.com videoplayback URLs.
+
+    These embed a client-IP lock (`mip`), an expiring timestamp (`expire`),
+    and a cryptographic signature (`sig`/`signature`) that are checked
+    against the requester. A server making the same request from a
+    different IP always gets a 403, no matter what headers or retries
+    are used, so there's no point attempting (or re-attempting) a download.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        params = parse_qs(parsed.query)
+    except Exception:
+        return False
+
+    if host.endswith("googlevideo.com"):
+        return True
+
+    has_ip_lock = "mip" in params or "ip" in params
+    has_signature = "sig" in params or "signature" in params or "lsig" in params
+    has_expiry = "expire" in params
+
+    return has_ip_lock and has_signature and has_expiry
+
+
+_SESSION_BOUND_URL_MESSAGE = (
+    "This URL is a session-limited streaming link — it's tied to the IP "
+    "address of the browser that generated it and expires shortly after. "
+    "It can't be downloaded from a server with a different IP, so the "
+    "download will always fail with a 403, regardless of headers or "
+    "retries. Try using a direct file link from a public host instead "
+    "(e.g., one ending in .mp4), or download the file to your own device "
+    "first and upload it directly."
+)
 
 
 def _looks_like_direct_media(url: str) -> bool:
@@ -311,12 +351,38 @@ def _extract_direct_media_info(url: str) -> dict:
     }
 
 
+# Realistic browser headers to avoid CDN blocks
+_DOWNLOAD_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "video/webm,video/mp4,video/*;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Fetch-Mode": "no-cors",
+    "Sec-Fetch-Dest": "video",
+    "Origin": "https://www.youtube.com",
+    "Referer": "https://www.youtube.com/",
+    "Connection": "keep-alive",
+}
+
+
 def _download_direct_media(url: str, output_path: Path) -> tuple[Path, dict]:
     """
     Stream a direct media URL straight to disk over HTTP.
+    Uses browser-like headers to avoid CDN blocks, handles redirect chains
+    manually so we can retry with alternative CDN edges when one returns 403.
+
     Returns (downloaded_file_path, info_dict).
     """
     import httpx
+
+    # Don't even try — IP-locked/session-bound URLs (e.g. googlevideo.com)
+    # will 403 on every single attempt, so skip straight to a clear error
+    # instead of burning time on retries that can't possibly succeed.
+    if _is_session_bound_cdn_url(url):
+        raise Exception(_SESSION_BOUND_URL_MESSAGE)
 
     info = _extract_direct_media_info(url)
     file_id = uuid.uuid4().hex[:12]
@@ -328,17 +394,72 @@ def _download_direct_media(url: str, output_path: Path) -> tuple[Path, dict]:
     )
     filepath = output_path / f"{file_id}.{ext}"
 
-    with httpx.Client(
-        follow_redirects=True, timeout=httpx.Timeout(30.0, read=None)
-    ) as client:
-        with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            with open(filepath, "wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=1024 * 1024):
-                    f.write(chunk)
+    # Collect all unique URLs from the redirect chain for fallback retries
+    candidate_urls: list[str] = [url]
 
-    info["id"] = file_id
-    return filepath, info
+    with httpx.Client(
+        follow_redirects=False,
+        timeout=httpx.Timeout(30.0, read=None),
+        headers=_DOWNLOAD_HEADERS,
+    ) as client:
+        current_url = url
+        last_error: Exception | None = None
+
+        # Try up to all candidates + 3 extra attempts
+        for attempt in range(len(candidate_urls) + 3):
+            if attempt < len(candidate_urls):
+                current_url = candidate_urls[attempt]
+            elif attempt == len(candidate_urls):
+                # After exhausting explicit candidates, try original URL fresh
+                current_url = url
+
+            try:
+                # Start streaming with no redirect following
+                with client.stream("GET", current_url) as resp:
+                    # Collect redirect chain URLs from the response history
+                    for redirect_resp in resp.history:
+                        loc = redirect_resp.headers.get("location")
+                        if loc and loc not in candidate_urls:
+                            candidate_urls.append(loc)
+
+                    resp.raise_for_status()
+                    with open(filepath, "wb") as f:
+                        for chunk in resp.iter_bytes(chunk_size=1024 * 1024):
+                            f.write(chunk)
+
+                    info["id"] = file_id
+                    return filepath, info
+
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                if e.response.status_code == 403:
+                    logger.warning(
+                        f"Download attempt {attempt + 1} got 403 for CDN edge, "
+                        f"trying next candidate... "
+                        f"({len(candidate_urls)} candidates available)"
+                    )
+                    # Add new redirect locations we may have missed
+                    for redirect_resp in e.response.history:
+                        loc = redirect_resp.headers.get("location")
+                        if loc and loc not in candidate_urls:
+                            candidate_urls.append(loc)
+                    continue
+                else:
+                    raise
+            except Exception:
+                raise
+
+    # If we exhausted all attempts, raise with context
+    raise Exception(
+        f"Download failed after {len(candidate_urls)} CDN redirects — "
+        f"all returned 403 Forbidden. "
+        f"This typically happens because the video URL is IP-restricted "
+        f"(tied to the browser/client that generated it) and cannot be "
+        f"downloaded from the server. "
+        f"Try using a direct media URL (e.g., ending in .mp4) from a "
+        f"publicly accessible host instead. "
+        f"Last error: {last_error}"
+    ) from last_error
 
 
 async def _upload_to_sia(
@@ -444,6 +565,9 @@ async def fetch_url_info(
             thumbnail=info["thumbnail"],
             webpageUrl=info["webpage_url"],
             isValid=True,
+            warning=(
+                _SESSION_BOUND_URL_MESSAGE if _is_session_bound_cdn_url(url) else None
+            ),
         )
 
     except Exception as e:

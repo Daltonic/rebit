@@ -1,7 +1,7 @@
 'use client';
 import { useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Upload, Video, AlertCircle, CheckCircle2, Loader2, File, Link, Globe } from 'lucide-react';
+import { Upload, Video, AlertCircle, AlertTriangle, CheckCircle2, Loader2, File, Link, Globe } from 'lucide-react';
 
 const ACCEPTED = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska'];
 const ACCEPTED_EXT = ['.mp4', '.mov', '.webm', '.mkv'];
@@ -35,6 +35,7 @@ interface UrlVideoInfo {
   thumbnail: string | null;
   webpageUrl: string;
   isValid: boolean;
+  warning?: string | null;
 }
 
 export default function UploadPage() {
@@ -466,6 +467,13 @@ export default function UploadPage() {
                     </div>
                   </div>
                 </div>
+                {urlInfo.warning && (
+                  <div className="flex items-start gap-2 px-4 py-3 border-t text-xs"
+                    style={{ borderColor: 'rgba(245,158,11,0.25)', background: 'rgba(245,158,11,0.08)', color: 'var(--text-secondary)' }}>
+                    <AlertTriangle size={14} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 1 }} />
+                    <span>{urlInfo.warning}</span>
+                  </div>
+                )}
               </div>
             )}
 
