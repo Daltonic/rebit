@@ -44,10 +44,6 @@ class AppSettings(Base):
     github_client_secret: Mapped[Optional[str]] = mapped_column("githubClientSecret", String, nullable=True)
     webauthn_rp_id: Mapped[Optional[str]] = mapped_column("webauthnRpId", String, nullable=True)
     webauthn_origin: Mapped[Optional[str]] = mapped_column("webauthnOrigin", String, nullable=True)
-    youtube_cookies_size: Mapped[Optional[int]] = mapped_column("youtubeCookiesSize", Integer, nullable=True)
-    youtube_cookies_updated_at: Mapped[Optional[datetime]] = mapped_column(
-        "youtubeCookiesUpdatedAt", DateTime(timezone=True), nullable=True
-    )
     difficulty_max_retries: Mapped[int] = mapped_column("difficultyMaxRetries", Integer, default=3)
     updated_at: Mapped[datetime] = mapped_column(
         "updatedAt",

@@ -9,7 +9,6 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import yt_dlp
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
@@ -35,7 +34,6 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application startup and shutdown."""
     logger.info("Starting ReBit backend...")
-    logger.info("yt-dlp version: %s", yt_dlp.version.__version__)
 
     # Create required directories
     settings.upload_path.mkdir(parents=True, exist_ok=True)

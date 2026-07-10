@@ -64,7 +64,6 @@ async def init_db():
         # We need to run ALTER TABLE for any schema changes.
 
         await conn.run_sync(_migrate_add_source_url)
-        await conn.run_sync(_migrate_app_settings_youtube_cookies)
 
 
 def _migrate_add_source_url(conn):
@@ -81,35 +80,6 @@ def _migrate_add_source_url(conn):
     else:
         import logging
         logging.getLogger(__name__).debug("Migration: source_url column already exists")
-
-
-def _migrate_app_settings_youtube_cookies(conn):
-    """
-    Add youtube_cookies columns to app_settings table if they don't exist.
-
-    These columns are defined in the SQLAlchemy AppSettings model but may not
-    exist in the actual PostgreSQL table if the table was created by Prisma's
-    initial migration before these fields were added.
-    """
-    import logging
-    from sqlalchemy import inspect, text
-
-    logger = logging.getLogger(__name__)
-
-    inspector = inspect(conn)
-    columns = [c["name"] for c in inspector.get_columns("app_settings")]
-
-    if "youtubeCookiesSize" not in columns:
-        conn.execute(text("ALTER TABLE app_settings ADD COLUMN \"youtubeCookiesSize\" INTEGER"))
-        logger.info("Migration: added youtubeCookiesSize column to app_settings table")
-    else:
-        logger.debug("Migration: youtubeCookiesSize column already exists")
-
-    if "youtubeCookiesUpdatedAt" not in columns:
-        conn.execute(text("ALTER TABLE app_settings ADD COLUMN \"youtubeCookiesUpdatedAt\" TIMESTAMP(3)"))
-        logger.info("Migration: added youtubeCookiesUpdatedAt column to app_settings table")
-    else:
-        logger.debug("Migration: youtubeCookiesUpdatedAt column already exists")
 
 
 async def close_db():

@@ -1,7 +1,7 @@
 'use client';
 import { useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Upload, Video, AlertCircle, CheckCircle2, Loader2, File, Link, Globe, PlaySquare } from 'lucide-react';
+import { Upload, Video, AlertCircle, CheckCircle2, Loader2, File, Link, Globe } from 'lucide-react';
 
 const ACCEPTED = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska'];
 const ACCEPTED_EXT = ['.mp4', '.mov', '.webm', '.mkv'];
@@ -97,7 +97,7 @@ export default function UploadPage() {
 
   const fetchUrlInfo = async () => {
     if (!url.trim() || !isValidUrl(url.trim())) {
-      setError('Please enter a valid video URL (e.g., https://www.youtube.com/watch?v=...)');
+      setError('Please enter a valid media URL (e.g., https://example.com/video.mp4)');
       return;
     }
 
@@ -283,7 +283,7 @@ export default function UploadPage() {
           <p className="text-sm px-2" style={{ color: 'var(--text-secondary)' }}>
             {mode === 'file'
               ? 'MP4, MOV, WebM, or MKV · Up to 5 GB · 2 hours max'
-              : 'YouTube, Vimeo, TikTok, Twitter/X, and more'
+              : 'Paste a direct link to a video or audio file'
             }
           </p>
         </div>
@@ -386,18 +386,18 @@ export default function UploadPage() {
               <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
-                    <PlaySquare size={18} style={{ color: '#ef4444' }} />
+                    style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)' }}>
+                    <Link size={18} style={{ color: 'var(--blue)' }} />
                   </div>
                   <div className="flex-1">
                     <label htmlFor="url-input" className="text-xs font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
-                      Video URL
+                      Media URL
                     </label>
                     <input
                       id="url-input"
                       ref={urlInputRef}
                       type="url"
-                      placeholder="https://www.youtube.com/watch?v=..."
+                      placeholder="https://example.com/video.mp4"
                       value={url}
                       onChange={e => { setUrl(e.target.value); setUrlInfo(null); setError(null); }}
                       onKeyDown={handleUrlKeyDown}
@@ -410,20 +410,12 @@ export default function UploadPage() {
 
                 {/* Supported sources hint */}
                 <div className="flex flex-wrap gap-2">
-                  {[
-                    { icon: PlaySquare, label: 'YouTube', color: '#ef4444' },
-                    { icon: Globe, label: 'Vimeo', color: '#1ab7ea' },
-                    { icon: Globe, label: 'TikTok', color: 'var(--text-muted)' },
-                    { icon: Globe, label: 'X/Twitter', color: 'var(--text-muted)' },
-                    { icon: Globe, label: 'Reddit', color: '#ff4500' },
-                  ].map(({ icon: Icon, label, color }) => (
-                    <span key={label}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs"
-                      style={{ background: 'var(--bg-elevated)', color }}>
-                      <Icon size={10} />
-                      {label}
-                    </span>
-                  ))}
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs"
+                    style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}>
+                    <Globe size={10} />
+                    Direct link to .mp4, .webm, .mov, .mkv, .avi, .mp3, .wav, .ogg
+                  </span>
                 </div>
               </div>
             </div>

@@ -63,17 +63,6 @@ services:
     entrypoint: >
       sh -c "sleep 5 && ollama pull nomic-embed-text"
 
-  # ── PO Token Provider (required for YouTube downloads) ──────────────
-  # yt-dlp's YouTube extractor talks to this over HTTP to mint PO tokens,
-  # which YouTube now requires for format/stream resolution regardless of
-  # cookies. https://github.com/Brainicism/bgutil-ytdlp-pot-provider
-  bgutil-pot:
-    image: brainicism/bgutil-ytdlp-pot-provider:latest
-    container_name: rebit-bgutil-pot
-    restart: unless-stopped
-    ports:
-      - "4416:4416"   # exposed on host so a locally-run (non-Docker) backend can reach it too
-
   # ── Backend (Python FastAPI) ───────────────────────────────────────
   backend:
     build:
@@ -92,7 +81,6 @@ services:
       DEBUG: "${DEBUG:-false}"
       UPLOAD_DIR: "/tmp/rebit/uploads"
       OUTPUT_DIR: "/tmp/rebit/output"
-      POT_PROVIDER_BASE_URL: "http://bgutil-pot:4416"
     volumes:
       - task_uploads:/tmp/rebit/uploads
       - task_output:/tmp/rebit/output
@@ -100,8 +88,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      bgutil-pot:
-        condition: service_started
     restart: unless-stopped
 
   # ── Frontend (Next.js) ─────────────────────────────────────────────
