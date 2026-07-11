@@ -19,15 +19,23 @@ export async function DELETE(
       method: 'DELETE',
     });
 
+    // Handle non-JSON error responses (e.g. FastAPI 500 plain text)
+    let data: any;
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      data = await res.json();
+    } else {
+      const text = await res.text();
+      data = { detail: text || `Backend returned status ${res.status}` };
+    }
+
     if (!res.ok) {
-      const data = await res.json();
       return NextResponse.json(
         { detail: data.detail || 'Failed to delete job' },
         { status: res.status }
       );
     }
 
-    const data = await res.json();
     return NextResponse.json(data);
   } catch (err) {
     console.error('Error proxying delete job to backend:', err);

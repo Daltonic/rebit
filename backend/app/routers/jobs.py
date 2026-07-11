@@ -191,18 +191,25 @@ async def delete_job(
     Delete a job and all related data (segments, pipeline steps, transcripts, sia logs).
     The cascade should handle related records automatically.
     """
-    result = await db.execute(select(Job).where(Job.id == job_id))
-    job = result.scalar_one_or_none()
+    try:
+        result = await db.execute(select(Job).where(Job.id == job_id))
+        job = result.scalar_one_or_none()
 
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-    await db.delete(job)
-    await db.commit()
+        await db.delete(job)
+        await db.commit()
 
-    logger.info(f"Job {job_id} deleted")
+        logger.info(f"Job {job_id} deleted")
 
-    return {"ok": True, "jobId": job_id}
+        return {"ok": True, "jobId": job_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to delete job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
 
 
 @router.get("/{job_id}/pipeline")
