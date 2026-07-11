@@ -189,7 +189,7 @@ async def delete_job(
     DELETE /api/jobs/{job_id}
 
     Delete a job and all related data (segments, pipeline steps, transcripts, sia logs).
-    The cascade should handle related records automatically.
+    Related records are deleted manually to avoid cascade issues between SQLAlchemy and Prisma.
     """
     try:
         result = await db.execute(select(Job).where(Job.id == job_id))
@@ -198,6 +198,15 @@ async def delete_job(
         if not job:
             raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
+        # Delete related records manually (SQLAlchemy doesn't mirror Prisma's onDelete: Cascade)
+        from sqlalchemy import delete as sa_delete
+
+        await db.execute(sa_delete(PipelineStep).where(PipelineStep.job_id == job_id))
+        await db.execute(sa_delete(Segment).where(Segment.job_id == job_id))
+        await db.execute(sa_delete(Transcript).where(Transcript.job_id == job_id))
+        await db.execute(sa_delete(SiaLog).where(SiaLog.job_id == job_id))
+
+        # Now delete the job itself
         await db.delete(job)
         await db.commit()
 
