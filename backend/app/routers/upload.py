@@ -84,12 +84,12 @@ async def _upload_to_sia(
             from sia_storage import PinnedObject
 
             obj = PinnedObject()
-            uploaded = sdk.upload(obj, file_data)
+            uploaded = await sdk.upload(obj, file_data)
             sia_object_id = uploaded.id()
 
             try:
-                pinned = sdk.object(sia_object_id)
-                sdk.pin_object(pinned)
+                pinned = await sdk.object(sia_object_id)
+                await sdk.pin_object(pinned)
             except Exception as e:
                 logger.warning(f"Failed to pin Sia object {sia_object_id}: {e}")
 
