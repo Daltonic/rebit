@@ -87,6 +87,7 @@ model Job {
   siaHash           String?       @map("sia_hash")
   indexdKey         String?       @map("indexd_key")
   siaStatus         SiaStatus     @default(pending) @map("sia_status")
+  userId            String?       @map("user_id")
   createdAt         DateTime      @default(now()) @map("created_at")
   updatedAt         DateTime      @updatedAt @map("updated_at")
 

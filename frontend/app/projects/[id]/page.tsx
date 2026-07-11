@@ -1,8 +1,9 @@
 'use client';
 import { use, useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import PipelineTracker from '@/components/PipelineTracker';
-import { ArrowLeft, ArrowRight, Loader2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Loader2, Trash2 } from 'lucide-react';
 import { JobStatus, PipelineStep, Segment } from '@/lib/types';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
@@ -44,9 +45,12 @@ interface JobData {
 
 export default function JobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const router = useRouter();
   const [jobData, setJobData] = useState<JobData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const fetchJobStatus = useCallback(async () => {
     try {
@@ -112,6 +116,23 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
       </div>
     );
   }
+
+  const handleDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/jobs/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to delete job');
+      }
+      router.push('/projects');
+    } catch (e: any) {
+      setError(e.message || 'Failed to delete job');
+      setDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
 
   const steps = jobData.pipelineSteps ?? [];
   const isComplete = jobData.status === 'complete';
@@ -224,6 +245,46 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
                   </span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Delete button */}
+          {!showDeleteConfirm ? (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              disabled={deleting}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all"
+              style={{
+                background: 'rgba(239,68,68,0.08)',
+                border: '1px solid rgba(239,68,68,0.2)',
+                color: 'var(--danger)',
+              }}>
+              <Trash2 size={14} />
+              Delete project
+            </button>
+          ) : (
+            <div
+              className="rounded-xl p-4 space-y-3"
+              style={{ border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.06)' }}>
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                Are you sure you want to delete <strong>{jobData.sourceFilename}</strong>? This action cannot be undone.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all"
+                  style={{ background: 'var(--danger)', color: 'white' }}>
+                  {deleting ? <><Loader2 size={12} className="animate-spin" /> Deleting...</> : 'Delete'}
+                </button>
+                <button
+                  onClick={() => { setShowDeleteConfirm(false); setError(null); }}
+                  disabled={deleting}
+                  className="flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all"
+                  style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
         </div>

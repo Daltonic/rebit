@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBackendUrl } from '@/lib/config';
+import { auth } from '@/lib/auth/auth';
 
 /**
  * POST /api/url-import
@@ -11,13 +12,19 @@ import { getBackendUrl } from '@/lib/config';
  */
 export async function POST(request: NextRequest) {
   try {
+    const session = await auth();
+    const userId = session?.user?.id;
+
     const body = await request.json();
     const backendUrl = await getBackendUrl();
+
+    // Attach the authenticated user ID so the backend can associate the job
+    const requestBody = userId ? { ...body, userId } : body;
 
     const res = await fetch(`${backendUrl}/api/url-import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestBody),
       // Allow up to 10 minutes for download + processing
       signal: AbortSignal.timeout(600_000),
     });

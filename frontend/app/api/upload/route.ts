@@ -1,16 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBackendUrl } from '@/lib/config';
+import { auth } from '@/lib/auth/auth';
 
 /**
  * POST /api/upload
  *
  * Upload a video file to the backend for processing.
- * Forwards the multipart form data as-is.
+ * Forwards the multipart form data as-is, including the user ID.
  */
 export async function POST(request: NextRequest) {
   try {
+    const session = await auth();
+    const userId = session?.user?.id;
+
     const backendUrl = await getBackendUrl();
     const formData = await request.formData();
+
+    // Append userId to the form data so the backend can associate the job
+    if (userId) {
+      formData.append('user_id', userId);
+    }
 
     const res = await fetch(`${backendUrl}/api/upload`, {
       method: 'POST',

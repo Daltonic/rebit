@@ -21,17 +21,21 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 @router.get("")
 async def list_jobs(
+    user_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
     GET /api/jobs
 
-    Returns a list of all jobs, ordered by most recently created first.
+    Returns a list of jobs, ordered by most recently created first.
+    If user_id is provided, only jobs belonging to that user are returned.
     Each job includes its pipeline steps and segment count.
     """
-    result = await db.execute(
-        select(Job).order_by(Job.created_at.desc()).limit(50)
-    )
+    query = select(Job)
+    if user_id:
+        query = query.where(Job.user_id == user_id)
+    query = query.order_by(Job.created_at.desc()).limit(50)
+    result = await db.execute(query)
     jobs = result.scalars().all()
 
     return [
@@ -174,6 +178,31 @@ async def get_job_status(
             for log in sia_logs
         ],
     }
+
+
+@router.delete("/{job_id}")
+async def delete_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    DELETE /api/jobs/{job_id}
+
+    Delete a job and all related data (segments, pipeline steps, transcripts, sia logs).
+    The cascade should handle related records automatically.
+    """
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    await db.delete(job)
+    await db.commit()
+
+    logger.info(f"Job {job_id} deleted")
+
+    return {"ok": True, "jobId": job_id}
 
 
 @router.get("/{job_id}/pipeline")

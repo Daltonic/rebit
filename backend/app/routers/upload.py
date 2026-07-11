@@ -131,6 +131,7 @@ async def _upload_to_sia(
 @router.post("/upload")
 async def upload_video(
     file: UploadFile = File(...),
+    user_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -169,6 +170,7 @@ async def upload_video(
         status="uploading",
         source_filename=file.filename,
         sia_status="pending",
+        user_id=user_id,
         created_at=now,
         updated_at=now,
     )

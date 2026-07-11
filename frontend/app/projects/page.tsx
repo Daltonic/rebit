@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Plus, Search, Loader2 } from 'lucide-react';
+import { useSession } from 'next-auth/react';
 import ProjectCard from '@/components/ProjectCard';
 import { JobStatus, PipelineStep, SiaUploadStatus } from '@/lib/types';
 
@@ -29,6 +30,7 @@ interface JobListItem {
 }
 
 export default function ProjectsPage() {
+  const { data: session } = useSession();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<JobStatus | 'all'>('all');
   const [jobs, setJobs] = useState<JobListItem[]>([]);
@@ -39,7 +41,9 @@ export default function ProjectsPage() {
     const fetchJobs = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`${BACKEND_URL}/api/jobs`);
+        const userId = session?.user?.id;
+        const params = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+        const res = await fetch(`${BACKEND_URL}/api/jobs${params}`);
         if (!res.ok) throw new Error(`Failed to fetch jobs: ${res.status}`);
         const data: JobListItem[] = await res.json();
         setJobs(data);
@@ -55,7 +59,7 @@ export default function ProjectsPage() {
     // Poll for updates every 10 seconds
     const interval = setInterval(fetchJobs, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [session?.user?.id]);
 
   const filtered = jobs.filter(j => {
     const matchSearch = j.sourceFilename.toLowerCase().includes(search.toLowerCase());

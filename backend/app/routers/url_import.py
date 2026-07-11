@@ -40,6 +40,7 @@ router = APIRouter(prefix="/api", tags=["url-import"])
 
 class UrlImportRequest(BaseModel):
     url: str = Field(..., description="Direct media URL")
+    user_id: Optional[str] = Field(None, alias="userId", description="Authenticated user ID")
 
 
 class UrlImportResponse(BaseModel):
@@ -651,6 +652,7 @@ async def import_from_url(
             source_url=url,
             duration_seconds=duration,
             sia_status="pending",
+            user_id=req.user_id,
             created_at=now,
             updated_at=now,
         )
