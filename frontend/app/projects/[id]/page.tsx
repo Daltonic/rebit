@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import PipelineTracker from '@/components/PipelineTracker';
 import { ArrowLeft, ArrowRight, Loader2, Trash2 } from 'lucide-react';
-import { JobStatus, PipelineStep, Segment } from '@/lib/types';
+import { PipelineStep, Segment } from '@/lib/types';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
@@ -59,7 +59,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         if (res.status === 404) {
           setError('Job not found');
           setLoading(false);
-          return;
+          return null;
         }
         throw new Error(`Failed to fetch job: ${res.status}`);
       }
@@ -68,19 +68,23 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
       setLoading(false);
       setError(null);
       return data;
-    } catch (e: any) {
-      if (!jobData) {
-        setError(e.message || 'Failed to load job');
-        setLoading(false);
-      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to load job';
+      setJobData((prev) => {
+        if (!prev) {
+          setError(message);
+          setLoading(false);
+        }
+        return prev;
+      });
       return null;
     }
-  }, [id, jobData]);
+  }, [id]);
 
   // Initial fetch
   useEffect(() => {
     fetchJobStatus();
-  }, [id]);
+  }, [fetchJobStatus]);
 
   // Poll for pipeline updates while job is in progress
   useEffect(() => {
@@ -94,10 +98,10 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
       if (data && terminalStatuses.includes(data.status)) {
         clearInterval(interval);
       }
-    }, 2000); // Poll every 2 seconds
+    }, 2000);
 
     return () => clearInterval(interval);
-  }, [jobData?.status, fetchJobStatus]);
+  }, [jobData, fetchJobStatus]);
 
   if (loading) {
     return (
@@ -127,8 +131,9 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         throw new Error(err.detail || 'Failed to delete job');
       }
       router.push('/projects');
-    } catch (e: any) {
-      setError(e.message || 'Failed to delete job');
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to delete job';
+      setError(message);
       setDeleting(false);
       setShowDeleteConfirm(false);
     }
@@ -157,7 +162,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
             <p className="text-sm mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{jobData.sourceFilename}</p>
           </div>
 
-          <PipelineTracker steps={steps} />
+          <PipelineTracker steps={steps} jobId={jobData.id} onRetry={() => fetchJobStatus()} />
 
           {/* Error state */}
           {isFailed && (
@@ -178,7 +183,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
                   {segmentCount} clips ready to approve or reject
                 </p>
               </div>
-              <ArrowRight size={16} className="flex-shrink-0" style={{ color: 'var(--accent-bright)' }} />
+              <ArrowRight size={16} className="shrink-0" style={{ color: 'var(--accent-bright)' }} />
             </Link>
           )}
 

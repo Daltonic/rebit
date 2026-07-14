@@ -11,4 +11,5 @@ aiofiles==24.1.0
 ffmpeg-python==0.2.0
 openai==1.58.1
 numpy==2.2.1
+openai-whisper==20250625
 sia-storage==0.8.0
