@@ -81,12 +81,18 @@ export default async function proxy(
   // ── Skip auth middleware for setup-related paths ──────────────────
   // During setup, there are no users yet, so auth checks would fail.
   // The setup wizard is pre-auth by design.
+  //
+  // Also skip /api/upload — the upload route handles auth itself, and
+  // we must avoid the middleware trying to read the multipart body
+  // (Next.js limits middleware bodies to 10MB by default, which would
+  // truncate large file uploads and corrupt the FormData boundary).
   if (
     pathname === '/setup' ||
     pathname.startsWith('/api/setup') ||
     pathname === '/login' ||
     pathname.startsWith('/api/auth') ||
-    pathname.startsWith('/api/inngest')
+    pathname.startsWith('/api/inngest') ||
+    pathname.startsWith('/api/upload')
   ) {
     return NextResponse.next();
   }
@@ -110,5 +116,7 @@ export default async function proxy(
 }
 
 export const config = {
-  matcher: ['/((?!api/auth|api/inngest|_next/static|_next/image|favicon.ico|file.svg|globe.svg|next.svg|vercel.svg|window.svg).*)'],
+  // Exclude /api/upload from middleware (large multipart bodies are
+  // truncated at 10MB by Next.js middleware, corrupting FormData).
+  matcher: ['/((?!api/auth|api/inngest|api/upload|_next/static|_next/image|favicon.ico|file.svg|globe.svg|next.svg|vercel.svg|window.svg).*)'],
 };

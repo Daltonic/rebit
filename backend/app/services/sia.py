@@ -48,7 +48,7 @@ async def store_job_artifacts(
     if not job:
         return {"passed": False, "message": f"Job {job_id} not found"}
 
-    await _update_step(db, job_id, "store", "running", 10, "Starting Sia storage...")
+    await _update_step(db, job_id, "sia_store", "running", 10, "Starting Sia storage...")
 
     try:
         # Check if Sia SDK is ready
@@ -57,7 +57,7 @@ async def store_job_artifacts(
             return await _demo_store(job_id, job, db)
 
         # Live mode — use SDK
-        await _update_step(db, job_id, "store", "running", 30, "Uploading transcript to Sia...")
+        await _update_step(db, job_id, "sia_store", "running", 30, "Uploading transcript to Sia...")
 
         # Step 1: Upload transcript
         transcript_result = await db.execute(
@@ -73,7 +73,7 @@ async def store_job_artifacts(
             await _add_sia_log(db, job_id, "upload_transcript", True, f"Transcript uploaded: {uploaded.id()}")
 
         # Step 2: Upload rendered clips
-        await _update_step(db, job_id, "store", "running", 50, "Uploading clips to Sia...")
+        await _update_step(db, job_id, "sia_store", "running", 50, "Uploading clips to Sia...")
         segments_result = await db.execute(
             select(Segment).where(
                 Segment.job_id == job_id,
@@ -92,7 +92,7 @@ async def store_job_artifacts(
                 await _add_sia_log(db, job_id, "upload_clip", True, f"Clip uploaded: {uploaded.id()}")
 
         # Step 3: Upload source video
-        await _update_step(db, job_id, "store", "running", 70, "Uploading source video to Sia...")
+        await _update_step(db, job_id, "sia_store", "running", 70, "Uploading source video to Sia...")
         video_path = settings.upload_path / f"{job_id}.mp4"
         if not video_path.exists():
             video_path = settings.upload_path / job.source_filename
@@ -105,7 +105,7 @@ async def store_job_artifacts(
             await _add_sia_log(db, job_id, "upload_source", True, f"Source uploaded: {uploaded.id()}")
 
         # Step 4: Pin all objects
-        await _update_step(db, job_id, "store", "running", 85, "Pinning objects on Sia...")
+        await _update_step(db, job_id, "sia_store", "running", 85, "Pinning objects on Sia...")
         all_object_ids = []
         if transcript and transcript.sia_object_id:
             all_object_ids.append(transcript.sia_object_id)
@@ -127,7 +127,7 @@ async def store_job_artifacts(
             job.sia_hash = all_object_ids[0]
             job.sia_status = "ready"
 
-        await _update_step(db, job_id, "store", "complete", 100, "Sia storage complete")
+        await _update_step(db, job_id, "sia_store", "complete", 100, "Sia storage complete")
 
         # Update job status
         job.status = "complete"
@@ -140,7 +140,7 @@ async def store_job_artifacts(
         }
 
     except Exception as e:
-        await _update_step(db, job_id, "store", "failed", 0, f"Sia storage failed: {str(e)}")
+        await _update_step(db, job_id, "sia_store", "failed", 0, f"Sia storage failed: {str(e)}")
         await _add_sia_log(db, job_id, "store", False, str(e))
         return {"passed": False, "message": f"Sia storage failed: {str(e)}"}
 
@@ -152,7 +152,7 @@ async def _demo_store(
     reason: str = "Sia not connected — demo mode",
 ) -> dict:
     """Store artifacts with demo (fake) Sia hashes."""
-    await _update_step(db, job_id, "store", "running", 50, f"Demo mode: {reason}")
+    await _update_step(db, job_id, "sia_store", "running", 50, f"Demo mode: {reason}")
 
     # Create demo hashes
     demo_hash = f"{DEMO_PREFIX}{job_id}"
@@ -177,7 +177,7 @@ async def _demo_store(
 
     await _add_sia_log(db, job_id, "demo_store", True, f"Demo storage complete: {demo_hash}")
 
-    await _update_step(db, job_id, "store", "complete", 100, "Demo storage complete")
+    await _update_step(db, job_id, "sia_store", "complete", 100, "Demo storage complete")
 
     # Update job status
     job.status = "complete"

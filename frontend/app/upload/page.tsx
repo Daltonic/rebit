@@ -181,19 +181,6 @@ export default function UploadPage() {
       const result = await uploadPromise;
       const { jobId } = result;
 
-      setProgress(35);
-      setStatusMessage('Video stored on Sia Network! Starting pipeline...');
-
-      // Step 2: Start the pipeline
-      try {
-        const pipelineRes = await fetch(`/api/jobs/${jobId}/start-pipeline`);
-        if (!pipelineRes.ok) {
-          console.warn('Pipeline start returned non-OK, pipeline may still run via Inngest');
-        }
-      } catch (e) {
-        console.warn('Could not start pipeline via backend, Inngest may handle it:', e);
-      }
-
       setProgress(50);
       setStatusMessage('Pipeline started! Redirecting to project...');
 

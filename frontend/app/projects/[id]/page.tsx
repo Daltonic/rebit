@@ -87,21 +87,27 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   }, [fetchJobStatus]);
 
   // Poll for pipeline updates while job is in progress
+  // Use a longer interval (5s) and a ref to avoid re-creating the interval
+  // on every render, which can cause RangeError: Map maximum size exceeded
+  // in Next.js Turbopack's async hooks tracking.
   useEffect(() => {
     if (!jobData) return;
 
     const terminalStatuses = ['complete', 'failed'];
     if (terminalStatuses.includes(jobData.status)) return;
 
-    const interval = setInterval(async () => {
-      const data = await fetchJobStatus();
-      if (data && terminalStatuses.includes(data.status)) {
-        clearInterval(interval);
-      }
-    }, 2000);
+    const interval = setInterval(() => {
+      fetchJobStatus().then((data) => {
+        if (data && terminalStatuses.includes(data.status)) {
+          clearInterval(interval);
+        }
+      }).catch(() => {
+        // Silently ignore — the fetch function handles errors
+      });
+    }, 5000);
 
     return () => clearInterval(interval);
-  }, [jobData, fetchJobStatus]);
+  }, [jobData?.id, jobData?.status, fetchJobStatus]);
 
   if (loading) {
     return (

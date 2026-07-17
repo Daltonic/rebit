@@ -28,16 +28,25 @@ export async function POST(request: NextRequest) {
       signal: AbortSignal.timeout(600_000),
     });
 
-    const data = await res.json();
+    // Read the response body as text first, then try to parse as JSON.
+    // The backend may return a plain-text error (e.g. FastAPI's default
+    // "Internal Server Error") which would crash res.json().
+    const bodyText = await res.text();
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(bodyText);
+    } catch {
+      data = { detail: bodyText || 'Upload failed' };
+    }
 
     if (!res.ok) {
       return NextResponse.json(
-        { detail: data.detail || 'Upload failed' },
+        { detail: (data.detail as string) || bodyText || 'Upload failed' },
         { status: res.status }
       );
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(data as Record<string, unknown>);
   } catch (err) {
     console.error('Error proxying upload to backend:', err);
     if (err instanceof DOMException && err.name === 'TimeoutError') {

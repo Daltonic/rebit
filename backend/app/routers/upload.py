@@ -1,13 +1,12 @@
 """
 Upload API router.
 
-Handles multipart video file uploads with the following flow:
-  1. Receive the video file via multipart form data
+Handles multipart video file uploads with a simple flow:
+  1. Validate the file
   2. Create a Job record in the database
-  3. Upload the source video to Sia Network (first priority — before any processing)
-  4. Save the video locally for pipeline processing
-  5. Trigger the pipeline orchestration in the background
-  6. Return the job_id to the frontend
+  3. Save the video locally
+  4. Return the job_id to the frontend immediately
+  5. Sia upload and pipeline stages run asynchronously in the background
 """
 
 import asyncio
@@ -18,13 +17,11 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import Job, PipelineStep, SiaLog
-from app.services import sia_client
+from app.models import Job, PipelineStep
 from app.services.pipeline_orchestrator import run_pipeline_async
 
 logger = logging.getLogger(__name__)
@@ -64,70 +61,6 @@ def _validate_video(filename: str, content_type: str, file_size: int) -> Optiona
     return None
 
 
-async def _upload_to_sia(
-    job_id: str,
-    file_data: bytes,
-    filename: str,
-    db: AsyncSession,
-) -> dict:
-    """
-    Upload the source video to Sia Network immediately.
-
-    This is the FIRST step of the pipeline — the video is stored on Sia
-    before any processing begins. Returns Sia object info or demo fallback.
-    """
-    sdk = await sia_client.get_sdk()
-
-    if sdk is not None:
-        # Live mode — upload to Sia
-        try:
-            from sia_storage import PinnedObject
-
-            obj = PinnedObject()
-            uploaded = await sdk.upload(obj, file_data)
-            sia_object_id = uploaded.id()
-
-            try:
-                pinned = await sdk.object(sia_object_id)
-                await sdk.pin_object(pinned)
-            except Exception as e:
-                logger.warning(f"Failed to pin Sia object {sia_object_id}: {e}")
-
-            db.add(SiaLog(
-                job_id=job_id,
-                step="sia_upload_source",
-                passed=True,
-                message=f"Source video uploaded to Sia: {sia_object_id}",
-            ))
-
-            logger.info(f"Source video uploaded to Sia for job {job_id}: {sia_object_id}")
-            return {"sia_object_id": sia_object_id, "sia_status": "ready", "demo": False}
-
-        except Exception as e:
-            error_msg = f"Sia upload failed: {str(e)}"
-            logger.error(error_msg)
-
-            db.add(SiaLog(
-                job_id=job_id,
-                step="sia_upload_source",
-                passed=False,
-                message=error_msg,
-            ))
-            # Fall through to demo mode
-
-    # Demo mode — generate fake Sia hash
-    demo_hash = f"demo-sia-{job_id}"
-    db.add(SiaLog(
-        job_id=job_id,
-        step="sia_upload_source",
-        passed=True,
-        message=f"Demo: Source video stored with hash {demo_hash}",
-    ))
-
-    logger.info(f"Demo Sia upload for job {job_id}: {demo_hash}")
-    return {"sia_object_id": demo_hash, "sia_status": "ready", "demo": True}
-
-
 @router.post("/upload")
 async def upload_video(
     file: UploadFile = File(...),
@@ -140,10 +73,9 @@ async def upload_video(
     Upload a video file. The flow is:
       1. Validate the file
       2. Create a Job record in the database
-      3. Upload the source video to Sia Network (FIRST — before any processing)
-      4. Save the video locally for pipeline processing
-      5. Start pipeline orchestration in the background
-      6. Return the job_id
+      3. Save the video locally
+      4. Return the job_id to the frontend immediately
+      5. Sia upload and pipeline stages run asynchronously in the background
 
     Accepts multipart/form-data with a single 'file' field.
     """
@@ -167,7 +99,7 @@ async def upload_video(
 
     job = Job(
         id=job_id,
-        status="uploading",
+        status="uploaded",
         source_filename=file.filename,
         sia_status="pending",
         user_id=user_id,
@@ -175,59 +107,6 @@ async def upload_video(
         updated_at=now,
     )
     db.add(job)
-
-    db.add(PipelineStep(
-        job_id=job_id,
-        stage="sia_upload",
-        status="running",
-        progress_pct=10,
-        message="Uploading source video to Sia Network...",
-        started_at=now,
-    ))
-
-    await db.flush()
-    logger.info(f"Job {job_id} created for file: {file.filename} ({file_size} bytes)")
-
-    # ── Upload to Sia FIRST ───────────────────────────────────────────────
-    try:
-        sia_result = await _upload_to_sia(job_id, file_data, file.filename, db)
-
-        job.source_sia_object_id = sia_result["sia_object_id"]
-        job.sia_hash = sia_result["sia_object_id"]
-        job.sia_status = sia_result["sia_status"]
-
-        step_result = await db.execute(
-            select(PipelineStep).where(
-                PipelineStep.job_id == job_id,
-                PipelineStep.stage == "sia_upload",
-            )
-        )
-        step = step_result.scalar_one_or_none()
-        if step:
-            step.status = "complete"
-            step.progress_pct = 100
-            step.message = f"Source video stored on Sia: {sia_result['sia_object_id'][:16]}..."
-            step.completed_at = datetime.now(timezone.utc)
-
-        await db.flush()
-        logger.info(f"Sia upload complete for job {job_id}: {sia_result['sia_object_id']}")
-
-    except Exception as e:
-        logger.error(f"Sia upload failed for job {job_id}: {e}")
-        step_result = await db.execute(
-            select(PipelineStep).where(
-                PipelineStep.job_id == job_id,
-                PipelineStep.stage == "sia_upload",
-            )
-        )
-        step = step_result.scalar_one_or_none()
-        if step:
-            step.status = "failed"
-            step.progress_pct = 0
-            step.message = f"Sia upload failed: {str(e)}"
-            step.completed_at = datetime.now(timezone.utc)
-
-        await db.flush()
 
     # ── Save Locally ──────────────────────────────────────────────────────
     try:
@@ -238,10 +117,14 @@ async def upload_video(
     except Exception as e:
         logger.error(f"Failed to save video locally for job {job_id}: {e}")
 
-    # ── Update Job Status ─────────────────────────────────────────────────
-    job.status = "uploaded"
-    job.updated_at = datetime.now(timezone.utc)
-
+    # ── Add pipeline steps ────────────────────────────────────────────────
+    db.add(PipelineStep(
+        job_id=job_id,
+        stage="sia_upload",
+        status="pending",
+        progress_pct=0,
+        message="Waiting for Sia upload...",
+    ))
     db.add(PipelineStep(
         job_id=job_id,
         stage="transcribe",
@@ -251,6 +134,7 @@ async def upload_video(
     ))
 
     await db.commit()
+    logger.info(f"Job {job_id} created for file: {file.filename} ({file_size} bytes)")
 
     # ── Trigger Pipeline (background) ────────────────────────────────────
     asyncio.create_task(run_pipeline_async(job_id))
@@ -260,7 +144,7 @@ async def upload_video(
         "jobId": job_id,
         "filename": file.filename,
         "sizeBytes": file_size,
-        "siaObjectId": job.source_sia_object_id,
-        "siaStatus": job.sia_status,
-        "status": job.status,
+        "siaObjectId": None,
+        "siaStatus": "pending",
+        "status": "uploaded",
     }

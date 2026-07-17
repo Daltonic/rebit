@@ -40,6 +40,12 @@ export default function PipelineTracker({ steps, jobId, onRetry }: { steps: Pipe
   const stepMap = Object.fromEntries(steps.map(s => [s.stage, s]));
   const [retryingStage, setRetryingStage] = useState<string | null>(null);
 
+  // Determine which stage is currently active (the first non-complete stage)
+  const activeStageIdx = STAGES.findIndex(({ key }) => {
+    const s = stepMap[key];
+    return !s || s.status !== 'complete';
+  });
+
   const handleRetry = async (stage: string) => {
     if (!jobId) return;
     setRetryingStage(stage);
@@ -107,7 +113,9 @@ export default function PipelineTracker({ steps, jobId, onRetry }: { steps: Pipe
                   </div>
                 </div>
 
-                {step?.message && (
+                {/* Only show message for completed, failed, or the active (current) step.
+                    Future steps show no message until they become active. */}
+                {step?.message && (status !== 'pending' || idx === activeStageIdx) && (
                   <p className="text-xs mt-0.5" style={{ color: status === 'failed' ? 'var(--danger)' : 'var(--text-secondary)', fontFamily: status === 'failed' ? 'var(--mono)' : 'var(--sans)' }}>
                     {step.message}
                   </p>
