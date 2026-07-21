@@ -198,7 +198,11 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
     }
   };
 
-  const steps = jobData.pipelineSteps ?? [];
+  // Deduplicate steps by stage — the backend can create duplicate PipelineStep
+  // records when the orchestrator and _update_step_safe use separate sessions.
+  const steps = (jobData.pipelineSteps ?? []).filter(
+    (step, index, arr) => arr.findIndex((s) => s.stage === step.stage) === index
+  );
   const isComplete = jobData.status === 'complete';
   const isFailed = jobData.status === 'failed';
   const segmentCount = jobData.segments?.length ?? 0;
