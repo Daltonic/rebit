@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Job, Segment, PipelineStep
+from app.services.pipeline_steps import upsert_pipeline_step
 
 
 async def render_clips(
@@ -45,7 +46,7 @@ async def render_clips(
     if not segments:
         return {"passed": False, "message": "No clips to render"}
 
-    await _update_step(db, job_id, "render", "running", 10, f"Rendering {len(segments)} clips...")
+    await upsert_pipeline_step(db, job_id, "render", "running", 10, f"Rendering {len(segments)} clips...")
 
     rendered_dir = settings.output_path / job_id / "rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
@@ -55,7 +56,7 @@ async def render_clips(
     try:
         for i, segment in enumerate(segments):
             progress = 10 + int((i / len(segments)) * 80)
-            await _update_step(
+            await upsert_pipeline_step(
                 db, job_id, "render", "running", progress,
                 f"Rendering clip {i + 1}/{len(segments)}..."
             )
@@ -137,13 +138,10 @@ async def render_clips(
                 segment.clip_path = str(output_path)
                 clips_rendered += 1
 
-        await _update_step(
+        await upsert_pipeline_step(
             db, job_id, "render", "complete", 100,
             f"Rendered {clips_rendered}/{len(segments)} clips"
         )
-
-        # Update job status
-        job.status = "rendering"
 
         return {
             "passed": True,
@@ -152,45 +150,8 @@ async def render_clips(
         }
 
     except subprocess.TimeoutExpired:
-        await _update_step(db, job_id, "render", "failed", 0, "Rendering timed out")
+        await upsert_pipeline_step(db, job_id, "render", "failed", 0, "Rendering timed out")
         return {"passed": False, "message": "Rendering timed out"}
     except Exception as e:
-        await _update_step(db, job_id, "render", "failed", 0, f"Rendering failed: {str(e)}")
+        await upsert_pipeline_step(db, job_id, "render", "failed", 0, f"Rendering failed: {str(e)}")
         return {"passed": False, "message": f"Rendering failed: {str(e)}"}
-
-
-async def _update_step(
-    db: AsyncSession,
-    job_id: str,
-    stage: str,
-    status: str,
-    progress_pct: int,
-    message: str,
-):
-    """Create or update a pipeline step record."""
-    now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(PipelineStep).where(
-            PipelineStep.job_id == job_id,
-            PipelineStep.stage == stage,
-        )
-    )
-    step = result.scalar_one_or_none()
-
-    if step:
-        step.status = status
-        step.progress_pct = progress_pct
-        step.message = message
-        if status == "running" and not step.started_at:
-            step.started_at = now
-        if status in ("complete", "failed"):
-            step.completed_at = now
-    else:
-        db.add(PipelineStep(
-            job_id=job_id,
-            stage=stage,
-            status=status,
-            progress_pct=progress_pct,
-            message=message,
-            started_at=now if status == "running" else None,
-        ))

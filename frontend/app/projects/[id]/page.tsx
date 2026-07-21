@@ -198,7 +198,12 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
     }
   };
 
-  const steps = jobData.pipelineSteps ?? [];
+  // Defensive dedup by stage. The backend now enforces a UNIQUE (job_id, stage)
+  // constraint so duplicate rows shouldn't occur anymore, but this keeps the
+  // UI safe even against stale data from before that migration ran.
+  const steps = (jobData.pipelineSteps ?? []).filter(
+    (step, index, arr) => arr.findIndex((s) => s.stage === step.stage) === index
+  );
   const isComplete = jobData.status === 'complete';
   const isFailed = jobData.status === 'failed';
   const segmentCount = jobData.segments?.length ?? 0;
@@ -217,16 +222,26 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
     try {
       const params = firstIncompleteStage ? `?start_from=${firstIncompleteStage}` : '';
       const res = await fetch(`/api/jobs/${id}/start-pipeline${params}`);
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Failed to resume pipeline');
+        throw new Error(data?.detail || 'Failed to resume pipeline');
+      }
+      if (data?.status === 'already_running') {
+        // The backend's lock rejected this — a pipeline task for this job
+        // is already in flight. Not an error, just nothing new to do.
+        setResumeError('Pipeline is already running for this job — give it a moment.');
       }
       // Refresh job data after a short delay so the backend has time to update
       setTimeout(() => fetchJobStatus(), 1000);
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Failed to resume pipeline';
       setResumeError(message);
-      setResuming(false);
+    } finally {
+      // Keep the button disabled for a few seconds no matter the outcome.
+      // Previously this only reset on error, so a fast successful response
+      // left the door open for an immediate second click before the
+      // backend's state had actually changed.
+      setTimeout(() => setResuming(false), 5000);
     }
   };
 

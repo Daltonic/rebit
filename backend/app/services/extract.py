@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Job, Segment, PipelineStep
+from app.services.pipeline_steps import upsert_pipeline_step
 
 
 async def extract_clips(
@@ -45,7 +46,7 @@ async def extract_clips(
     if not segments:
         return {"passed": False, "message": "No segments to extract"}
 
-    await _update_step(db, job_id, "extract", "running", 10, f"Extracting {len(segments)} clips...")
+    await upsert_pipeline_step(db, job_id, "extract", "running", 10, f"Extracting {len(segments)} clips...")
 
     # Locate source video
     video_path = settings.upload_path / f"{job_id}.mp4"
@@ -62,7 +63,7 @@ async def extract_clips(
     try:
         for i, segment in enumerate(segments):
             progress = 10 + int((i / len(segments)) * 80)
-            await _update_step(
+            await upsert_pipeline_step(
                 db, job_id, "extract", "running", progress,
                 f"Extracting clip {i + 1}/{len(segments)}..."
             )
@@ -97,13 +98,10 @@ async def extract_clips(
                 segment.clip_path = str(clip_path)
                 clips_rendered += 1
 
-        await _update_step(
+        await upsert_pipeline_step(
             db, job_id, "extract", "complete", 100,
             f"Extracted {clips_rendered}/{len(segments)} clips"
         )
-
-        # Update job status
-        job.status = "extracting"
 
         return {
             "passed": True,
@@ -112,45 +110,8 @@ async def extract_clips(
         }
 
     except subprocess.TimeoutExpired:
-        await _update_step(db, job_id, "extract", "failed", 0, "Clip extraction timed out")
+        await upsert_pipeline_step(db, job_id, "extract", "failed", 0, "Clip extraction timed out")
         return {"passed": False, "message": "Clip extraction timed out"}
     except Exception as e:
-        await _update_step(db, job_id, "extract", "failed", 0, f"Extraction failed: {str(e)}")
+        await upsert_pipeline_step(db, job_id, "extract", "failed", 0, f"Extraction failed: {str(e)}")
         return {"passed": False, "message": f"Clip extraction failed: {str(e)}"}
-
-
-async def _update_step(
-    db: AsyncSession,
-    job_id: str,
-    stage: str,
-    status: str,
-    progress_pct: int,
-    message: str,
-):
-    """Create or update a pipeline step record."""
-    now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(PipelineStep).where(
-            PipelineStep.job_id == job_id,
-            PipelineStep.stage == stage,
-        )
-    )
-    step = result.scalar_one_or_none()
-
-    if step:
-        step.status = status
-        step.progress_pct = progress_pct
-        step.message = message
-        if status == "running" and not step.started_at:
-            step.started_at = now
-        if status in ("complete", "failed"):
-            step.completed_at = now
-    else:
-        db.add(PipelineStep(
-            job_id=job_id,
-            stage=stage,
-            status=status,
-            progress_pct=progress_pct,
-            message=message,
-            started_at=now if status == "running" else None,
-        ))

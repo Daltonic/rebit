@@ -2,22 +2,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Segment } from '@/lib/types';
 import {
-  Check, X, Clock, TrendingUp, Zap, Heart, Download,
-  Play, Pause, Volume2, VolumeX, Maximize2, AlertCircle,
+  Check, X, Clock, Zap, Heart, Download,
+  Play, Pause, Volume2, VolumeX, Maximize2, AlertCircle, ChevronDown,
 } from 'lucide-react';
 
 function hookColor(h: string) {
   if (h === 'Strong') return 'var(--success)';
   if (h === 'Moderate') return 'var(--warning)';
   return 'var(--text-muted)';
-}
-
-function ScoreBar({ value, color }: { value: number; color: string }) {
-  return (
-    <div className="score-bar flex-1">
-      <div className="score-bar-fill" style={{ width: `${value}%`, background: color }} />
-    </div>
-  );
 }
 
 function formatDur(s: number) {
@@ -276,9 +268,13 @@ interface ClipCardProps {
   onReject?: (id: string) => void;
 }
 
+const TRANSCRIPT_CLAMP_LENGTH = 130;
+
 export default function ClipCard({ segment, sourceUrl, onApprove, onReject }: ClipCardProps) {
   const [status, setStatus] = useState(segment.status);
+  const [expanded, setExpanded] = useState(false);
   const clipDuration = segment.endSeconds - segment.startSeconds;
+  const isLongTranscript = segment.transcriptExcerpt.length > TRANSCRIPT_CLAMP_LENGTH;
 
   const handleApprove = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -289,6 +285,10 @@ export default function ClipCard({ segment, sourceUrl, onApprove, onReject }: Cl
     e.stopPropagation();
     setStatus('rejected');
     onReject?.(segment.id);
+  };
+  const toggleExpanded = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpanded(v => !v);
   };
 
   const borderColor = status === 'approved'
@@ -319,7 +319,7 @@ export default function ClipCard({ segment, sourceUrl, onApprove, onReject }: Cl
           : <VideoPlaceholder />
         }
 
-        {/* Virality badge */}
+        {/* Virality badge — the one place score lives, so it isn't repeated below */}
         <div
           className="absolute top-2 right-2 px-2 py-0.5 rounded text-xs font-semibold"
           style={{
@@ -361,40 +361,48 @@ export default function ClipCard({ segment, sourceUrl, onApprove, onReject }: Cl
       </div>
 
       {/* Content */}
-      <div className="p-4 space-y-3">
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          &quot;{segment.transcriptExcerpt}&quot;
-        </p>
+      <div className="p-3.5 space-y-2.5">
+        {/* Transcript — clamped to 3 lines by default so cards stay even in the grid */}
+        <div>
+          <p
+            className="text-sm leading-relaxed"
+            style={{
+              color: 'var(--text-secondary)',
+              display: '-webkit-box',
+              WebkitLineClamp: expanded ? 'unset' : 3,
+              WebkitBoxOrient: 'vertical',
+              overflow: expanded ? 'visible' : 'hidden',
+            }}
+          >
+            &quot;{segment.transcriptExcerpt}&quot;
+          </p>
+          {isLongTranscript && (
+            <button
+              onClick={toggleExpanded}
+              className="mt-1 flex items-center gap-1 text-xs font-medium"
+              style={{ color: 'var(--accent-bright)' }}
+            >
+              {expanded ? 'Show less' : 'Show more'}
+              <ChevronDown size={11} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+            </button>
+          )}
+        </div>
 
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <TrendingUp size={11} style={{ color: 'var(--accent-bright)', flexShrink: 0 }} />
-            <span className="text-xs w-16" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)' }}>virality</span>
-            <ScoreBar value={segment.viralityScore} color="var(--accent-bright)" />
-            <span className="text-xs w-6 text-right" style={{ color: 'var(--text-secondary)', fontFamily: 'var(--mono)' }}>{segment.viralityScore}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Zap size={11} style={{ color: hookColor(segment.hookStrength), flexShrink: 0 }} />
-            <span className="text-xs w-16" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)' }}>hook</span>
-            <span className="text-xs" style={{ color: hookColor(segment.hookStrength) }}>{segment.hookStrength}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Heart size={11} style={{ color: 'var(--danger)', flexShrink: 0 }} />
-            <span className="text-xs w-16" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)' }}>signal</span>
-            <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>{segment.emotionalSignal}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Clock size={11} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-            <span className="text-xs w-16" style={{ color: 'var(--text-muted)', fontFamily: 'var(--mono)' }}>duration</span>
-            <span className="text-xs" style={{ color: 'var(--text-secondary)', fontFamily: 'var(--mono)' }}>{Math.round(clipDuration)}s</span>
-          </div>
+        {/* Meta — one compact row instead of four stacked label/value lines */}
+        <div className="flex items-center flex-wrap gap-x-3 gap-y-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
+          <span className="inline-flex items-center gap-1" style={{ color: hookColor(segment.hookStrength) }}>
+            <Zap size={11} />{segment.hookStrength} hook
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Heart size={11} style={{ color: 'var(--danger)' }} />{segment.emotionalSignal}
+          </span>
+          <span className="inline-flex items-center gap-1" style={{ fontFamily: 'var(--mono)' }}>
+            <Clock size={11} style={{ color: 'var(--text-muted)' }} />{Math.round(clipDuration)}s
+          </span>
         </div>
 
         {/* Actions */}
-        <div className="flex gap-2 pt-1">
+        <div className="flex gap-2 pt-1" style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 10 }}>
           {status === 'approved' ? (
             <button
               onClick={e => e.stopPropagation()}

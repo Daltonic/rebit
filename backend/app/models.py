@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -93,6 +94,19 @@ class Job(Base):
         default="pending",
     )
     user_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # Pipeline execution lock. NULL means no pipeline task is currently
+    # running for this job. When a pipeline task starts, it atomically
+    # sets this to the current timestamp (via a single UPDATE ... WHERE
+    # pipeline_lock_at IS NULL, so only one caller can ever "win" the
+    # race), and clears it back to NULL when it finishes. A lock older
+    # than PIPELINE_LOCK_STALE_AFTER (see pipeline_orchestrator.py) is
+    # treated as abandoned (e.g. the process crashed) and can be
+    # re-acquired, so a bad deploy can't permanently wedge a job.
+    pipeline_lock_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -155,6 +169,13 @@ class Segment(Base):
 
 class PipelineStep(Base):
     __tablename__ = "pipeline_steps"
+    __table_args__ = (
+        # This is what makes upsert_pipeline_step() in pipeline_steps.py
+        # safe: the database itself refuses to hold two rows for the
+        # same (job_id, stage), so there is no gap left for two
+        # concurrent writers to both "successfully" insert a duplicate.
+        UniqueConstraint("job_id", "stage", name="uq_pipeline_step_job_stage"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
     job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"))

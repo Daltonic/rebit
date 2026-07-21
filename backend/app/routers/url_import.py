@@ -28,9 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import AppSettings, Job, PipelineStep, SiaLog
+from app.models import AppSettings, Job, SiaLog
 from app.services import sia_client
-from app.services.pipeline_orchestrator import run_pipeline_async
+from app.services.pipeline_orchestrator import start_pipeline_task
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["url-import"])
@@ -658,16 +658,13 @@ async def import_from_url(
         )
         db.add(job)
 
-        db.add(
-            PipelineStep(
-                job_id=job_id,
-                stage="sia_upload",
-                status="running",
-                progress_pct=10,
-                message="Uploading source video to Sia Network...",
-                started_at=now,
-            )
-        )
+        # NOTE: we used to pre-create a "sia_upload" PipelineStep row here.
+        # That raced with the orchestrator's own get-or-create for the same
+        # stage once the pipeline started (two sessions, two different
+        # views of the row) and was a direct contributor to the duplicate/
+        # stuck-stage bugs. The orchestrator is now the sole writer of
+        # pipeline_steps; see sia_upload.py's idempotency check for how it
+        # avoids re-uploading the file we're about to upload below.
 
         await db.flush()
         logger.info(
@@ -689,41 +686,17 @@ async def import_from_url(
         job.sia_hash = sia_result["sia_object_id"]
         job.sia_status = sia_result["sia_status"]
 
-        step_result = await db.execute(
-            select(PipelineStep).where(
-                PipelineStep.job_id == job_id,
-                PipelineStep.stage == "sia_upload",
-            )
-        )
-        step = step_result.scalar_one_or_none()
-        if step:
-            step.status = "complete"
-            step.progress_pct = 100
-            step.message = (
-                f"Source video stored on Sia: {sia_result['sia_object_id'][:16]}..."
-            )
-            step.completed_at = datetime.now(timezone.utc)
-
         await db.flush()
         logger.info(
             f"Sia upload complete for job {job_id}: {sia_result['sia_object_id']}"
         )
 
     except Exception as e:
-        logger.error(f"Sia upload failed for job {job_id}: {e}")
-        step_result = await db.execute(
-            select(PipelineStep).where(
-                PipelineStep.job_id == job_id,
-                PipelineStep.stage == "sia_upload",
-            )
-        )
-        step = step_result.scalar_one_or_none()
-        if step:
-            step.status = "failed"
-            step.progress_pct = 0
-            step.message = f"Sia upload failed: {str(e)}"
-            step.completed_at = datetime.now(timezone.utc)
-        await db.flush()
+        # Don't fail the whole import over this — job.sia_status simply
+        # stays non-"ready", and the orchestrator's own sia_upload stage
+        # will retry the upload for real once the pipeline runs (see the
+        # idempotency check at the top of upload_source_to_sia()).
+        logger.error(f"Eager Sia upload failed for job {job_id}, pipeline will retry: {e}")
 
     # ── Step 4: Save locally (already downloaded, just copy to uploads) ──
     try:
@@ -741,18 +714,13 @@ async def import_from_url(
         pass
 
     # ── Step 5: Update job and trigger pipeline ───────────────────────
+    # NOTE: we no longer pre-create a "transcribe" PipelineStep row here.
+    # The orchestrator creates every stage's row itself, the first time it
+    # actually starts that stage — that's what makes upsert_pipeline_step's
+    # database-level UNIQUE (job_id, stage) constraint airtight instead of
+    # racing a second writer.
     job.status = "uploaded"
     job.updated_at = datetime.now(timezone.utc)
-
-    db.add(
-        PipelineStep(
-            job_id=job_id,
-            stage="transcribe",
-            status="pending",
-            progress_pct=0,
-            message="Waiting for transcription...",
-        )
-    )
 
     try:
         await db.commit()
@@ -764,9 +732,12 @@ async def import_from_url(
             detail=f"Video was downloaded and stored, but the job record could not be finalized. Error: {str(e)}",
         )
 
-    # Trigger pipeline in background
-    asyncio.create_task(run_pipeline_async(job_id))
-    logger.info(f"Async pipeline started for job {job_id}")
+    # Trigger pipeline in background. start_pipeline_task() acquires a
+    # per-job lock before spawning anything, so if something else (e.g. a
+    # user clicking "Resume pipeline" a moment later) tries to start the
+    # same job's pipeline concurrently, only one execution actually runs.
+    await start_pipeline_task(job_id)
+    logger.info(f"Pipeline start requested for job {job_id}")
 
     return UrlImportResponse(
         jobId=job_id,

@@ -287,15 +287,21 @@ async def start_pipeline(
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-    # Kick off the pipeline in the background
-    from app.services.pipeline_orchestrator import run_pipeline_async
-    import asyncio
-    asyncio.create_task(run_pipeline_async(job_id, start_from))
+    # Kick off the pipeline in the background. start_pipeline_task() acquires
+    # a per-job lock before spawning anything, so clicking "Resume pipeline"
+    # while a pipeline task is already running for this job (or while the
+    # auto-start from upload is still in flight) is a no-op instead of a
+    # second task racing the first one over the same rows.
+    from app.services.pipeline_orchestrator import start_pipeline_task
+    start_result = await start_pipeline_task(job_id, start_from)
 
-    logger.info(f"Pipeline manually started for job {job_id} (start_from={start_from})")
+    if start_result["started"]:
+        logger.info(f"Pipeline manually started for job {job_id} (start_from={start_from})")
+    else:
+        logger.info(f"Pipeline start requested for job {job_id} but one is already running")
 
     return {
         "jobId": job_id,
-        "status": "started",
-        "message": f"Pipeline started from stage: {start_from or 'beginning'}",
+        "status": "started" if start_result["started"] else "already_running",
+        "message": start_result["message"],
     }
