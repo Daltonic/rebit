@@ -2,19 +2,21 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Job, JobStatus } from '@/lib/types';
-import { ArrowRight, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, Video } from 'lucide-react';
+import { ArrowRight, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, Video, Trash2 } from 'lucide-react';
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
 function statusConfig(s: JobStatus) {
   const configs = {
-    uploading:    { label: 'Uploading',     color: 'var(--info)',     bg: 'rgba(59,130,246,0.1)',   icon: Loader2, spin: true },
-    uploaded:     { label: 'Uploaded',      color: 'var(--info)',     bg: 'rgba(59,130,246,0.1)',   icon: Loader2, spin: true },
-    transcribing: { label: 'Transcribing',  color: 'var(--info)',     bg: 'rgba(59,130,246,0.1)',   icon: Loader2, spin: true },
-    detecting:    { label: 'Detecting',     color: 'var(--accent-bright)', bg: 'rgba(139,92,246,0.1)', icon: Loader2, spin: true },
-    extracting:   { label: 'Extracting',    color: 'var(--accent-bright)', bg: 'rgba(139,92,246,0.1)', icon: Loader2, spin: true },
-    rendering:    { label: 'Rendering',     color: 'var(--warning)',  bg: 'rgba(245,158,11,0.1)',   icon: Loader2, spin: true },
-    storing:      { label: 'Storing',       color: 'var(--warning)',  bg: 'rgba(245,158,11,0.1)',   icon: Loader2, spin: true },
-    complete:     { label: 'Complete',      color: 'var(--success)',  bg: 'rgba(16,185,129,0.1)',   icon: CheckCircle2, spin: false },
-    failed:       { label: 'Failed',        color: 'var(--danger)',   bg: 'rgba(239,68,68,0.1)',    icon: XCircle, spin: false },
+    uploading: { label: 'Uploading', color: 'var(--info)', bg: 'rgba(59,130,246,0.1)', icon: Loader2, spin: true },
+    uploaded: { label: 'Uploaded', color: 'var(--info)', bg: 'rgba(59,130,246,0.1)', icon: Loader2, spin: true },
+    transcribing: { label: 'Transcribing', color: 'var(--info)', bg: 'rgba(59,130,246,0.1)', icon: Loader2, spin: true },
+    detecting: { label: 'Detecting', color: 'var(--accent-bright)', bg: 'rgba(139,92,246,0.1)', icon: Loader2, spin: true },
+    extracting: { label: 'Extracting', color: 'var(--accent-bright)', bg: 'rgba(139,92,246,0.1)', icon: Loader2, spin: true },
+    rendering: { label: 'Rendering', color: 'var(--warning)', bg: 'rgba(245,158,11,0.1)', icon: Loader2, spin: true },
+    storing: { label: 'Storing', color: 'var(--warning)', bg: 'rgba(245,158,11,0.1)', icon: Loader2, spin: true },
+    complete: { label: 'Complete', color: 'var(--success)', bg: 'rgba(16,185,129,0.1)', icon: CheckCircle2, spin: false },
+    failed: { label: 'Failed', color: 'var(--danger)', bg: 'rgba(239,68,68,0.1)', icon: XCircle, spin: false },
   };
   return configs[s] ?? configs.uploading;
 }
@@ -49,7 +51,17 @@ function TimeAgo({ iso }: { iso: string }) {
   return <>{Math.floor(h / 24)}d ago</>;
 }
 
-export default function ProjectCard({ job }: { job: Job }) {
+interface ProjectCardProps {
+  job: Job;
+  /** Called after the project has been deleted on the backend, so the parent list can drop it. */
+  onDeleted?: (jobId: string) => void;
+}
+
+export default function ProjectCard({ job, onDeleted }: ProjectCardProps) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const cfg = statusConfig(job.status);
   const Icon = cfg.icon;
   const isProcessing = !['complete', 'failed'].includes(job.status);
@@ -57,9 +69,40 @@ export default function ProjectCard({ job }: { job: Job }) {
     ? `/projects/${job.id}/clips`
     : `/projects/${job.id}`;
 
+  const openConfirm = (e: React.MouseEvent | React.KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDeleteError(null);
+    setConfirmOpen(true);
+  };
+
+  const cancelDelete = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setConfirmOpen(false);
+  };
+
+  const confirmDelete = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/jobs/${job.id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+      onDeleted?.(job.id);
+    } catch {
+      setDeleting(false);
+      setDeleteError("Couldn't delete this project. Try again.");
+    }
+  };
+
   return (
-    <Link href={href} className="block group rounded-xl p-4 sm:p-5 transition-all duration-200 active:scale-[0.99] sm:hover:scale-[1.01]"
-      style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+    <Link
+      href={href}
+      className="relative block group rounded-xl p-4 sm:p-5 transition-all duration-200 active:scale-[0.99] sm:hover:scale-[1.01]"
+      style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}
+    >
       <div className="flex items-start gap-3 sm:gap-4">
         {/* Icon */}
         <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center shrink-0"
@@ -107,16 +150,70 @@ export default function ProjectCard({ job }: { job: Job }) {
           })()}
         </div>
 
-        {/* Arrow */}
-        <ArrowRight size={14} style={{ color: 'var(--text-muted)', flexShrink: 0, marginTop: 2 }}
-          className="hidden sm:block transition-transform group-hover:translate-x-1" />
+        {/* Right rail: delete + arrow, always visible so deleting never requires opening the project */}
+        <div className="flex flex-col items-center gap-2 shrink-0">
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={`Delete ${job.sourceFilename}`}
+            onClick={openConfirm}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') openConfirm(e); }}
+            className="w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer transition-colors hover:bg-[rgba(239,68,68,0.12)]"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            <Trash2 size={14} className="group-hover:opacity-100" style={{ opacity: 0.75 }} />
+          </div>
+          <ArrowRight size={14} style={{ color: 'var(--text-muted)' }}
+            className="hidden sm:block transition-transform group-hover:translate-x-1" />
+        </div>
       </div>
 
       {job.status === 'failed' && (
         <div className="mt-3 flex items-center gap-1.5 text-xs cursor-pointer hover:opacity-80 py-1"
           style={{ color: 'var(--danger)' }}
-          onClick={e => { e.preventDefault(); alert('Retry not yet wired to API'); }}>
+          onClick={e => { e.preventDefault(); e.stopPropagation(); alert('Retry not yet wired to API'); }}>
           <RotateCcw size={11} /> Retry job
+        </div>
+      )}
+
+      {/* Delete confirmation overlay */}
+      {confirmOpen && (
+        <div
+          onClick={e => { e.preventDefault(); e.stopPropagation(); }}
+          className="absolute inset-0 rounded-xl flex flex-col items-center justify-center gap-3 px-5 text-center"
+          style={{ background: 'rgba(10,10,14,0.94)', backdropFilter: 'blur(2px)', zIndex: 20 }}
+        >
+          <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+            Delete this project?
+          </p>
+          <p className="text-xs max-w-[85%]" style={{ color: 'var(--text-muted)' }}>
+            {job.sourceFilename} and its clips will be removed. This can&apos;t be undone.
+          </p>
+          {deleteError && (
+            <p className="text-xs" style={{ color: 'var(--danger)' }}>{deleteError}</p>
+          )}
+          <div className="flex items-center gap-2 mt-1">
+            <button
+              onClick={cancelDelete}
+              disabled={deleting}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium"
+              style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={confirmDelete}
+              disabled={deleting}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+              style={{ background: 'rgba(239,68,68,0.15)', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.3)' }}
+            >
+              {deleting
+                ? <Loader2 size={12} className="animate-spin" />
+                : <Trash2 size={12} />
+              }
+              {deleting ? 'Deleting…' : 'Delete'}
+            </button>
+          </div>
         </div>
       )}
     </Link>
