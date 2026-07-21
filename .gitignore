@@ -29,5 +29,8 @@ frontend/uploads/
 /dist
 /.inngest
 
+# Runtime data (uploads, output, app key, etc.)
+backend/data/
+
 # App key
-backend/data/appkey.hex
+**/appkey.hex

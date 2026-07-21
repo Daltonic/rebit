@@ -1,6 +1,9 @@
 """
 Application configuration loaded from environment variables.
 Maps to the AppSettings model from the Prisma schema.
+
+All values are sourced from the `.env` file in the backend directory.
+No secrets or environment-specific values are hardcoded.
 """
 
 from pathlib import Path
@@ -9,36 +12,38 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Database
-    database_url: str = "postgresql+asyncpg://rebit:rebit@localhost:5432/rebit"
+    database_url: str = ""
 
     # FastAPI
     debug: bool = False
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = ""
 
     # Sia Storage
     sia_mode: str = "auto"  # "auto" | "demo"
-    sia_key_path: str = "/tmp/sia/appkey.hex"
-    sia_indexer_url: str = ""
-    sia_app_id: str = ""
-    sia_app_name: str = "ReBit"
-    sia_app_description: str = "Decentralized Video Clipping Engine"
+    sia_key_path: str = ""
 
     # OpenRouter (LLM calls)
     openrouter_key: str = ""
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_base_url: str = ""
 
     # Whisper model
-    whisper_model: str = "base"
-    whisper_device: str = "cpu"
+    whisper_model: str = ""
+    whisper_device: str = ""
 
     # File storage
-    upload_dir: str = "/tmp/rebit/uploads"
-    output_dir: str = "/tmp/rebit/output"
+    upload_dir: str = ""
+    output_dir: str = ""
 
     # Pipeline
-    max_upload_size_mb: int = 500
+    max_upload_size_mb: int = 0
 
-    model_config = {"env_prefix": "", "case_sensitive": False}
+    model_config = {
+        "env_prefix": "",
+        "case_sensitive": False,
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     @property
     def cors_origin_list(self) -> list[str]:

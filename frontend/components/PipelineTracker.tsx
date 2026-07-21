@@ -1,6 +1,9 @@
 'use client';
+import { useState } from 'react';
 import { PipelineStep, StageStatus } from '@/lib/types';
-import { Check, X, Loader2, Clock, Mic, Brain, Scissors, Film, Database, Upload } from 'lucide-react';
+import { Check, X, Loader2, Clock, Mic, Brain, Scissors, Film, Database, Upload, RefreshCw } from 'lucide-react';
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
 const STAGES: { key: PipelineStep['stage']; label: string; icon: React.ElementType }[] = [
   { key: 'sia_upload', label: 'Sia Upload', icon: Upload },
@@ -33,8 +36,29 @@ function elapsed(start: string | null, end: string | null) {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-export default function PipelineTracker({ steps }: { steps: PipelineStep[] }) {
+export default function PipelineTracker({ steps, jobId, onRetry }: { steps: PipelineStep[]; jobId?: string; onRetry?: (stage: string) => void }) {
   const stepMap = Object.fromEntries(steps.map(s => [s.stage, s]));
+  const [retryingStage, setRetryingStage] = useState<string | null>(null);
+
+  // Determine which stage is currently active (the first non-complete stage)
+  const activeStageIdx = STAGES.findIndex(({ key }) => {
+    const s = stepMap[key];
+    return !s || s.status !== 'complete';
+  });
+
+  const handleRetry = async (stage: string) => {
+    if (!jobId) return;
+    setRetryingStage(stage);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/jobs/${jobId}/start-pipeline?start_from=${stage}`);
+      if (!res.ok) throw new Error('Failed to retry');
+      if (onRetry) onRetry(stage);
+    } catch (e) {
+      console.error('Retry failed:', e);
+    } finally {
+      setRetryingStage(null);
+    }
+  };
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
@@ -49,6 +73,7 @@ export default function PipelineTracker({ steps }: { steps: PipelineStep[] }) {
           const step = stepMap[key];
           const status: StageStatus = step?.status ?? 'pending';
           const color = statusColor(status);
+          const isRetrying = retryingStage === key;
 
           return (
             <div key={key} className="px-4 sm:px-5 py-3.5 sm:py-4 flex items-start gap-3 sm:gap-4">
@@ -59,7 +84,11 @@ export default function PipelineTracker({ steps }: { steps: PipelineStep[] }) {
                     borderColor: status === 'pending' ? 'var(--border)' : color,
                     background: status === 'pending' ? 'transparent' : `${color}15`,
                   }}>
-                  <Icon size={11} style={{ color: status === 'pending' ? 'var(--text-muted)' : color }} />
+                  {isRetrying ? (
+                    <Loader2 size={11} className="animate-spin" style={{ color: 'var(--accent-bright)' }} />
+                  ) : (
+                    <Icon size={11} style={{ color: status === 'pending' ? 'var(--text-muted)' : color }} />
+                  )}
                 </div>
                 {idx < STAGES.length - 1 && (
                   <div className="w-px flex-1 mt-1" style={{ minHeight: 16, background: status === 'complete' ? 'var(--success)' : 'var(--border)' }} />
@@ -79,12 +108,14 @@ export default function PipelineTracker({ steps }: { steps: PipelineStep[] }) {
                       </span>
                     )}
                     <div className="w-4 h-4 flex items-center justify-center">
-                      <StatusIcon status={status} />
+                      <StatusIcon status={isRetrying ? 'running' : status} />
                     </div>
                   </div>
                 </div>
 
-                {step?.message && (
+                {/* Only show message for completed, failed, or the active (current) step.
+                    Future steps show no message until they become active. */}
+                {step?.message && (status !== 'pending' || idx === activeStageIdx) && (
                   <p className="text-xs mt-0.5" style={{ color: status === 'failed' ? 'var(--danger)' : 'var(--text-secondary)', fontFamily: status === 'failed' ? 'var(--mono)' : 'var(--sans)' }}>
                     {step.message}
                   </p>
@@ -94,6 +125,26 @@ export default function PipelineTracker({ steps }: { steps: PipelineStep[] }) {
                   <div className="mt-2 score-bar">
                     <div className="score-bar-fill" style={{ width: `${step.progressPct}%` }} />
                   </div>
+                )}
+
+                {/* Retry button for failed steps */}
+                {status === 'failed' && jobId && (
+                  <button
+                    onClick={() => handleRetry(key)}
+                    disabled={isRetrying}
+                    className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-[1.02]"
+                    style={{
+                      background: 'rgba(124,58,237,0.1)',
+                      border: '1px solid rgba(124,58,237,0.25)',
+                      color: 'var(--accent-bright)',
+                      opacity: isRetrying ? 0.6 : 1,
+                    }}>
+                    {isRetrying ? (
+                      <><Loader2 size={11} className="animate-spin" /> Retrying...</>
+                    ) : (
+                      <><RefreshCw size={11} /> Retry from here</>
+                    )}
+                  </button>
                 )}
               </div>
             </div>

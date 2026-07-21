@@ -86,12 +86,12 @@ export default function SettingsPage() {
   // React 18+ pattern that avoids hydration mismatches AND ESLint errors.
   // The subscribe() returns a no-op because these values never change.
   const passkeyAvailable = useSyncExternalStore(
-    () => () => {},
+    () => () => { },
     () => typeof window !== 'undefined' && window.PublicKeyCredential !== undefined,
     () => null
   );
   const devicePlatform = useSyncExternalStore(
-    () => () => {},
+    () => () => { },
     () => typeof navigator !== 'undefined' ? navigator.platform || 'Unknown device' : 'Unknown device',
     () => 'Unknown device'
   );
@@ -143,7 +143,7 @@ export default function SettingsPage() {
     fetch('/api/auth/passkey/status')
       .then((res) => res.json())
       .then((data) => setEnrolled(Boolean(data.enrolled)))
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   // Redirect if not logged in — wait for session to resolve first
@@ -471,11 +471,10 @@ export default function SettingsPage() {
               background: passkeyAvailable
                 ? 'rgba(16,185,129,0.1)'
                 : 'rgba(239,68,68,0.1)',
-              border: `1px solid ${
-                passkeyAvailable
-                  ? 'rgba(16,185,129,0.2)'
-                  : 'rgba(239,68,68,0.2)'
-              }`,
+              border: `1px solid ${passkeyAvailable
+                ? 'rgba(16,185,129,0.2)'
+                : 'rgba(239,68,68,0.2)'
+                }`,
             }}
           >
             {passkeyAvailable ? (
@@ -543,8 +542,8 @@ export default function SettingsPage() {
                 ? 'rgba(16,185,129,0.1)'
                 : 'rgba(239,68,68,0.1)',
               border: `1px solid ${message.type === 'success'
-                  ? 'rgba(16,185,129,0.2)'
-                  : 'rgba(239,68,68,0.2)'
+                ? 'rgba(16,185,129,0.2)'
+                : 'rgba(239,68,68,0.2)'
                 }`,
               color: message.type === 'success' ? 'var(--success)' : 'var(--danger)',
             }}

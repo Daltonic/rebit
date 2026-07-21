@@ -14,6 +14,7 @@
  */
 
 import type { SiaStatus, SiaRegistrationResponse, SiaCheckResponse } from '@/lib/types';
+import { getBackendUrl } from '@/lib/config';
 
 // ── Module State ───────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ export async function initSiaClient(
   // Check backend Sia status — the backend handles the fast-path
   // reconnection using the stored AppKey on disk.
   try {
-    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    const backendUrl = await getBackendUrl();
     const response = await fetch(`${backendUrl}/api/sia/status`);
     if (response.ok) {
       const data = await response.json();
@@ -118,7 +119,7 @@ export async function registrationStart(
 
   try {
     // Proxy through the backend — the backend owns the Sia SDK
-    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    const backendUrl = await getBackendUrl();
     const response = await fetch(`${backendUrl}/api/sia/register/init`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -160,7 +161,7 @@ export async function registrationCheck(config: {
 
   try {
     // Proxy through the backend
-    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    const backendUrl = await getBackendUrl();
     const response = await fetch(`${backendUrl}/api/sia/register/check`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -207,7 +208,7 @@ export async function disconnectSia(): Promise<void> {
   _demoReason = 'Disconnected by user';
   // Notify backend to clean up
   try {
-    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    const backendUrl = await getBackendUrl();
     await fetch(`${backendUrl}/api/sia/disconnect`, { method: 'POST' });
   } catch {
     // Backend may be unreachable — ignore

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
 import { invalidateSetupCache } from '@/proxy';
+import { getBackendUrl } from '@/lib/config';
 
 /**
  * POST /api/setup/sia/check
@@ -33,7 +34,7 @@ export async function POST() {
     }
 
     // Proxy approval check through the backend
-    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    const backendUrl = await getBackendUrl();
     const backendResponse = await fetch(
       `${backendUrl}/api/sia/register/check`,
       {

@@ -1,9 +1,11 @@
 'use client';
-import { use, useState, useEffect, useCallback } from 'react';
+import { use, useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import PipelineTracker from '@/components/PipelineTracker';
-import { ArrowLeft, ArrowRight, Loader2 } from 'lucide-react';
-import { JobStatus, PipelineStep, Segment } from '@/lib/types';
+import { ArrowLeft, ArrowRight, Loader2, Play, Trash2 } from 'lucide-react';
+import { PipelineStep, Segment } from '@/lib/types';
+import { usePipelineSSE } from '@/lib/hooks/usePipelineSSE';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
@@ -44,9 +46,14 @@ interface JobData {
 
 export default function JobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const router = useRouter();
   const [jobData, setJobData] = useState<JobData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
 
   const fetchJobStatus = useCallback(async () => {
     try {
@@ -55,7 +62,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         if (res.status === 404) {
           setError('Job not found');
           setLoading(false);
-          return;
+          return null;
         }
         throw new Error(`Failed to fetch job: ${res.status}`);
       }
@@ -64,36 +71,96 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
       setLoading(false);
       setError(null);
       return data;
-    } catch (e: any) {
-      if (!jobData) {
-        setError(e.message || 'Failed to load job');
-        setLoading(false);
-      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to load job';
+      setJobData((prev) => {
+        if (!prev) {
+          setError(message);
+          setLoading(false);
+        }
+        return prev;
+      });
       return null;
     }
-  }, [id, jobData]);
+  }, [id]);
 
   // Initial fetch
   useEffect(() => {
     fetchJobStatus();
-  }, [id]);
+  }, [fetchJobStatus]);
 
-  // Poll for pipeline updates while job is in progress
+  // ── Real-time SSE updates (replaces polling) ──────────────────────────
+  // When SSE is active, pipeline steps update instantly as the backend
+  // processes each stage. Falls back to polling if SSE fails.
+  const [sseFailed, setSseFailed] = useState(false);
+
+  const handleStepUpdate = useCallback((step: { stage: string; status: string; progressPct: number; message: string }) => {
+    setJobData((prev) => {
+      if (!prev) return prev;
+      const steps = prev.pipelineSteps.map((s) =>
+        s.stage === step.stage
+          ? { ...s, status: step.status as PipelineStep['status'], progressPct: step.progressPct, message: step.message }
+          : s
+      );
+      // If step doesn't exist yet, add it
+      if (!steps.find((s) => s.stage === step.stage)) {
+        steps.push({
+          id: '',
+          jobId: prev.id,
+          stage: step.stage as PipelineStep['stage'],
+          status: step.status as PipelineStep['status'],
+          progressPct: step.progressPct,
+          message: step.message,
+          startedAt: null,
+          completedAt: null,
+        });
+      }
+      return { ...prev, pipelineSteps: steps };
+    });
+  }, []);
+
+  const handleJobStatus = useCallback((status: string, message: string) => {
+    setJobData((prev) => {
+      if (!prev) return prev;
+      return { ...prev, status };
+    });
+  }, []);
+
+  const handlePipelineComplete = useCallback(() => {
+    // Refresh full job data to get segments, logs, etc.
+    fetchJobStatus();
+  }, [fetchJobStatus]);
+
+  const handleSseError = useCallback((_error: string) => {
+    setSseFailed(true);
+  }, []);
+
+  usePipelineSSE({
+    jobId: jobData?.id,
+    onStepUpdate: handleStepUpdate,
+    onJobStatus: handleJobStatus,
+    onPipelineComplete: handlePipelineComplete,
+    onError: handleSseError,
+    enabled: !!jobData && !['complete', 'failed'].includes(jobData.status),
+  });
+
+  // ── Polling fallback (only if SSE fails) ──────────────────────────────
   useEffect(() => {
-    if (!jobData) return;
+    if (!jobData || !sseFailed) return;
 
     const terminalStatuses = ['complete', 'failed'];
     if (terminalStatuses.includes(jobData.status)) return;
 
-    const interval = setInterval(async () => {
-      const data = await fetchJobStatus();
-      if (data && terminalStatuses.includes(data.status)) {
-        clearInterval(interval);
-      }
-    }, 2000); // Poll every 2 seconds
+    const interval = setInterval(() => {
+      fetchJobStatus().then((data) => {
+        if (data && terminalStatuses.includes(data.status)) {
+          clearInterval(interval);
+        }
+      }).catch(() => {});
+    }, 5000);
 
     return () => clearInterval(interval);
-  }, [jobData?.status, fetchJobStatus]);
+  }, [jobData?.id, jobData?.status, fetchJobStatus, sseFailed]);
 
   if (loading) {
     return (
@@ -113,10 +180,55 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
     );
   }
 
+  const handleDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/jobs/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to delete job');
+      }
+      router.push('/projects');
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to delete job';
+      setError(message);
+      setDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
+
   const steps = jobData.pipelineSteps ?? [];
   const isComplete = jobData.status === 'complete';
   const isFailed = jobData.status === 'failed';
   const segmentCount = jobData.segments?.length ?? 0;
+
+  // Determine if the pipeline is stuck and can be resumed
+  const isRunning = steps.some((s) => s.status === 'running');
+  const canResume = !isComplete && !isRunning && !['uploading'].includes(jobData.status);
+
+  // Find the first non-complete stage to resume from
+  const firstIncompleteStage = steps.find((s) => s.status !== 'complete')?.stage ?? undefined;
+
+  const handleResume = async () => {
+    if (resuming) return;
+    setResuming(true);
+    setResumeError(null);
+    try {
+      const params = firstIncompleteStage ? `?start_from=${firstIncompleteStage}` : '';
+      const res = await fetch(`/api/jobs/${id}/start-pipeline${params}`);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to resume pipeline');
+      }
+      // Refresh job data after a short delay so the backend has time to update
+      setTimeout(() => fetchJobStatus(), 1000);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to resume pipeline';
+      setResumeError(message);
+      setResuming(false);
+    }
+  };
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
@@ -136,7 +248,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
             <p className="text-sm mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{jobData.sourceFilename}</p>
           </div>
 
-          <PipelineTracker steps={steps} />
+          <PipelineTracker steps={steps} jobId={jobData.id} onRetry={() => fetchJobStatus()} />
 
           {/* Error state */}
           {isFailed && (
@@ -157,7 +269,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
                   {segmentCount} clips ready to approve or reject
                 </p>
               </div>
-              <ArrowRight size={16} className="flex-shrink-0" style={{ color: 'var(--accent-bright)' }} />
+              <ArrowRight size={16} className="shrink-0" style={{ color: 'var(--accent-bright)' }} />
             </Link>
           )}
 
@@ -224,6 +336,69 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
                   </span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Resume pipeline button — shown when pipeline is stuck */}
+          {canResume && !showDeleteConfirm && (
+            <button
+              onClick={handleResume}
+              disabled={resuming}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all"
+              style={{
+                background: 'rgba(124,58,237,0.1)',
+                border: '1px solid rgba(124,58,237,0.3)',
+                color: 'var(--accent-bright)',
+              }}>
+              {resuming ? (
+                <><Loader2 size={14} className="animate-spin" /> Resuming...</>
+              ) : (
+                <><Play size={14} /> Resume pipeline</>
+              )}
+            </button>
+          )}
+
+          {resumeError && (
+            <p className="text-xs text-center" style={{ color: 'var(--danger)' }}>{resumeError}</p>
+          )}
+
+          {/* Delete button */}
+          {!showDeleteConfirm ? (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              disabled={deleting}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all"
+              style={{
+                background: 'rgba(239,68,68,0.08)',
+                border: '1px solid rgba(239,68,68,0.2)',
+                color: 'var(--danger)',
+              }}>
+              <Trash2 size={14} />
+              Delete project
+            </button>
+          ) : (
+            <div
+              className="rounded-xl p-4 space-y-3"
+              style={{ border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.06)' }}>
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                Are you sure you want to delete <strong>{jobData.sourceFilename}</strong>? This action cannot be undone.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all"
+                  style={{ background: 'var(--danger)', color: 'white' }}>
+                  {deleting ? <><Loader2 size={12} className="animate-spin" /> Deleting...</> : 'Delete'}
+                </button>
+                <button
+                  onClick={() => { setShowDeleteConfirm(false); setError(null); }}
+                  disabled={deleting}
+                  className="flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all"
+                  style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -1,17 +1,14 @@
 import { NextResponse, NextFetchEvent } from 'next/server';
 import type { NextRequest } from 'next/server';
-import NextAuth from 'next-auth';
-import { authConfig } from '@/lib/auth/auth.config';
-
-const authMiddleware = NextAuth(authConfig).auth;
+import { auth } from '@/lib/auth/auth';
+import { prisma } from '@/lib/prisma/client';
 
 // ── Setup Status Cache ──────────────────────────────────────────────────
 // The setup status only changes during the initial setup flow, so we cache
 // it aggressively to avoid hammering the API on every single request.
-// This prevents the Turbopack async hooks Map from growing unbounded.
 let cachedSetupComplete: boolean | null = null;
 let cacheTimestamp = 0;
-const CACHE_TTL_MS = 10_000; // 10 seconds — balances freshness with safety
+const CACHE_TTL_MS = 10_000; // 10 seconds
 
 async function checkSetupComplete(baseUrl: string): Promise<boolean> {
   const now = Date.now();
@@ -81,11 +78,45 @@ export default async function proxy(
     }
   }
 
+  // ── Skip auth middleware for setup-related paths ──────────────────
+  // During setup, there are no users yet, so auth checks would fail.
+  // The setup wizard is pre-auth by design.
+  //
+  // Also skip /api/upload — the upload route handles auth itself, and
+  // we must avoid the middleware trying to read the multipart body
+  // (Next.js limits middleware bodies to 10MB by default, which would
+  // truncate large file uploads and corrupt the FormData boundary).
+  if (
+    pathname === '/setup' ||
+    pathname.startsWith('/api/setup') ||
+    pathname === '/login' ||
+    pathname.startsWith('/api/auth') ||
+    pathname.startsWith('/api/inngest') ||
+    pathname.startsWith('/api/upload')
+  ) {
+    return NextResponse.next();
+  }
+
   // ── Delegate to NextAuth for auth checks ─────────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return authMiddleware(request as any, event as any);
+  // We reuse the singleton auth() from lib/auth/auth.ts so that only ONE
+  // NextAuth instance exists. Creating a second instance (even with the
+  // same config) can cause cookie encryption mismatches — for example the
+  // PKCE code verifier cookie set by the sign-in handler may fail to
+  // parse during the OAuth callback.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const response = await auth(request as any, event as any);
+    return response;
+  } catch (err) {
+    console.error('Auth middleware error:', err);
+    // If auth middleware fails (e.g. no secret configured yet), allow the
+    // request through — the page component will handle the unauthenticated state.
+    return NextResponse.next();
+  }
 }
 
 export const config = {
-  matcher: ['/((?!api/auth|_next/static|_next/image|favicon.ico|file.svg|globe.svg|next.svg|vercel.svg|window.svg).*)'],
+  // Exclude /api/upload from middleware (large multipart bodies are
+  // truncated at 10MB by Next.js middleware, corrupting FormData).
+  matcher: ['/((?!api/auth|api/inngest|api/upload|_next/static|_next/image|favicon.ico|file.svg|globe.svg|next.svg|vercel.svg|window.svg).*)'],
 };

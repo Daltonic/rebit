@@ -9,26 +9,23 @@ import { invalidateSetupCache } from '@/proxy';
  */
 export async function GET() {
   try {
-    const settings = await prisma.appSettings.findUnique({
-      where: { id: 'default' },
-    });
-
-    if (!settings) {
-      return NextResponse.json({
-        hasGoogle: false,
-        hasGitHub: false,
-        hasWebauthn: false,
-        webauthnRpId: null,
-        webauthnOrigin: null,
+    let settings = null;
+    try {
+      settings = await prisma.appSettings.findUnique({
+        where: { id: 'default' },
       });
+    } catch {
+      // Database not available yet (e.g. during initial setup before
+      // migrations have run, or if DATABASE_URL is not configured).
+      // Return default unconfigured state.
     }
 
     return NextResponse.json({
-      hasGoogle: !!(settings.googleClientId && settings.googleClientSecret),
-      hasGitHub: !!(settings.githubClientId && settings.githubClientSecret),
-      hasWebauthn: !!(settings.webauthnRpId && settings.webauthnOrigin),
-      webauthnRpId: settings.webauthnRpId,
-      webauthnOrigin: settings.webauthnOrigin,
+      hasGoogle: !!(settings?.googleClientId && settings?.googleClientSecret),
+      hasGitHub: !!(settings?.githubClientId && settings?.githubClientSecret),
+      hasWebauthn: !!(settings?.webauthnRpId && settings?.webauthnOrigin),
+      webauthnRpId: settings?.webauthnRpId ?? null,
+      webauthnOrigin: settings?.webauthnOrigin ?? null,
     });
   } catch (err) {
     console.error('Error fetching provider config:', err);

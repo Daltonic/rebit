@@ -2,28 +2,29 @@
 Pipeline orchestration service.
 
 Coordinates the full pipeline execution for a job:
-  1. transcribe  —  Speech-to-text via Whisper (real implementation)
-  2. detect     —  Highlight/segment detection from transcript (real)
-  3. extract    —  Clip extraction via ffmpeg (real)
-  4. render     —  Vertical 9:16 format rendering (real)
-  5. sia_store  —  Store all artifacts on Sia (real)
+  0. sia_upload  —  Upload source video to Sia Network
+  1. transcribe  —  Speech-to-text via Whisper
+  2. detect      —  Highlight/segment detection from transcript
+  3. extract     —  Clip extraction via ffmpeg
+  4. render      —  Vertical 9:16 format rendering
+  5. sia_store   —  Store all artifacts on Sia
 
 Each step updates the pipeline_steps table with progress so the frontend
-can poll for real-time status updates.
-
-The initial Sia upload (step 0) happens in the upload router itself,
-before any of these pipeline steps begin.
+can poll for real-time status updates. Stages run sequentially — each
+stage must complete before the next one begins.
 """
 
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_factory
 from app.models import Job, PipelineStep
+from app.services.pipeline_events import publish_step_update, publish_job_status
+from app.services.sia_upload import upload_source_to_sia
 from app.services.transcribe import transcribe_job
 from app.services.detect import detect_highlights
 from app.services.extract import extract_clips
@@ -33,8 +34,15 @@ from app.services.sia import store_job_artifacts
 logger = logging.getLogger(__name__)
 
 # ── Pipeline Stage Definitions ────────────────────────────────────────────
+# Stages run in order. Each stage must complete before the next begins.
 
 STAGES = [
+    {
+        "stage": "sia_upload",
+        "name": "Sia Upload",
+        "func": upload_source_to_sia,
+        "description": "Uploading source video to Sia Network...",
+    },
     {
         "stage": "transcribe",
         "name": "Transcription",
@@ -100,7 +108,6 @@ async def run_pipeline(
         stage_name = stage_def["stage"]
 
         if start_from:
-            # Start from the specified stage
             if stage_name == start_from:
                 should_run = True
             if not should_run:
@@ -108,16 +115,15 @@ async def run_pipeline(
 
         stages_to_run.append(stage_def)
 
-    # If no start_from specified, run all stages
     if not start_from:
         stages_to_run = STAGES
 
-    # Execute each stage
+    # Execute each stage sequentially
     for stage_def in stages_to_run:
         stage_name = stage_def["stage"]
         stage_func = stage_def["func"]
 
-        # Check if this stage is already complete (skip if so)
+        # ── Check if this stage is already complete ──────────────────────
         step_result = await db.execute(
             select(PipelineStep).where(
                 PipelineStep.job_id == job_id,
@@ -129,28 +135,36 @@ async def run_pipeline(
             logger.info(f"Stage '{stage_name}' already complete for job {job_id}, skipping")
             continue
 
-        # Check if this stage already has a pipeline_step record
+        # ── Get or create the step record ────────────────────────────────
         step_result = await db.execute(
             select(PipelineStep).where(
                 PipelineStep.job_id == job_id,
                 PipelineStep.stage == stage_name,
             )
         )
-        existing_step = step_result.scalar_one_or_none()
+        step = step_result.scalar_one_or_none()
 
-        if not existing_step:
-            # Create the step record as pending
-            db.add(PipelineStep(
+        if not step:
+            step = PipelineStep(
                 job_id=job_id,
                 stage=stage_name,
                 status="pending",
                 progress_pct=0,
                 message=f"Waiting for {stage_def['description']}",
-            ))
+            )
+            db.add(step)
             await db.flush()
 
+        # ── Mark as running (ALWAYS do this, even for newly created steps) ──
+        step.status = "running"
+        step.started_at = datetime.now(timezone.utc)
+        step.progress_pct = 5
+        step.message = stage_def["description"]
+        await db.flush()
+        logger.info(f"Stage '{stage_name}' now running for job {job_id}")
+
+        # ── Execute the stage ────────────────────────────────────────────
         try:
-            logger.info(f"Running stage '{stage_name}' for job {job_id}")
             result = await stage_func(job_id, db)
 
             if result.get("passed"):
@@ -166,20 +180,11 @@ async def run_pipeline(
 
         except Exception as e:
             logger.error(f"Pipeline stage '{stage_name}' threw exception for job {job_id}: {e}")
-            # Mark the step as failed
-            step_result = await db.execute(
-                select(PipelineStep).where(
-                    PipelineStep.job_id == job_id,
-                    PipelineStep.stage == stage_name,
-                )
-            )
-            step = step_result.scalar_one_or_none()
-            if step:
-                step.status = "failed"
-                step.progress_pct = 0
-                step.message = f"Failed: {str(e)[:200]}"
-                step.completed_at = datetime.now(timezone.utc)
-                await db.flush()
+            step.status = "failed"
+            step.progress_pct = 0
+            step.message = f"Failed: {str(e)[:200]}"
+            step.completed_at = datetime.now(timezone.utc)
+            await db.flush()
 
             return {
                 "passed": False,
@@ -201,7 +206,7 @@ async def run_pipeline(
 async def run_pipeline_async(job_id: str, start_from: Optional[str] = None):
     """
     Run the pipeline in the background (non-blocking).
-    
+
     Creates its own database session so it doesn't hold up the request.
     This is used by the upload endpoint to kick off the pipeline without
     waiting for it to finish.

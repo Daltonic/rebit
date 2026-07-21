@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
 import { invalidateSetupCache } from '@/proxy';
+import { getBackendUrl } from '@/lib/config';
 
 /**
  * GET /api/setup/sia
@@ -9,26 +10,21 @@ import { invalidateSetupCache } from '@/proxy';
  */
 export async function GET() {
   try {
-    const settings = await prisma.appSettings.findUnique({
-      where: { id: 'default' },
-    });
-
-    if (!settings) {
-      return NextResponse.json({
-        siaIndexerUrl: null,
-        siaAppId: null,
-        siaAppName: null,
-        siaAppDescription: null,
-        siaConnected: false,
+    let settings = null;
+    try {
+      settings = await prisma.appSettings.findUnique({
+        where: { id: 'default' },
       });
+    } catch {
+      // Database not available yet — return default unconfigured state
     }
 
     return NextResponse.json({
-      siaIndexerUrl: settings.siaIndexerUrl,
-      siaAppId: settings.siaAppId,
-      siaAppName: settings.siaAppName,
-      siaAppDescription: settings.siaAppDescription,
-      siaConnected: settings.siaConnected,
+      siaIndexerUrl: settings?.siaIndexerUrl ?? null,
+      siaAppId: settings?.siaAppId ?? null,
+      siaAppName: settings?.siaAppName ?? null,
+      siaAppDescription: settings?.siaAppDescription ?? null,
+      siaConnected: settings?.siaConnected ?? false,
     });
   } catch (err) {
     console.error('Error fetching Sia config:', err);
@@ -108,7 +104,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const backendUrl = process.env.BACKEND_URL || 'http://backend:8000';
+    const backendUrl = await getBackendUrl();
 
     // When reconnecting from the settings page, first disconnect the backend
     // so a fresh registration + approval flow can begin. Do NOT write to the
@@ -121,24 +117,31 @@ export async function POST(request: NextRequest) {
       }
     } else {
       // Save config to database (mark siaConnected = false until registration completes)
-      await prisma.appSettings.upsert({
-        where: { id: 'default' },
-        update: {
-          siaIndexerUrl,
-          siaAppId,
-          siaAppName: siaAppName || 'ReBit',
-          siaAppDescription: siaAppDescription || '',
-          siaConnected: false,
-        },
-        create: {
-          id: 'default',
-          siaIndexerUrl,
-          siaAppId,
-          siaAppName: siaAppName || 'ReBit',
-          siaAppDescription: siaAppDescription || '',
-          siaConnected: false,
-        },
-      });
+      try {
+        await prisma.appSettings.upsert({
+          where: { id: 'default' },
+          update: {
+            siaIndexerUrl,
+            siaAppId,
+            siaAppName: siaAppName || 'ReBit',
+            siaAppDescription: siaAppDescription || '',
+            siaConnected: false,
+          },
+          create: {
+            id: 'default',
+            siaIndexerUrl,
+            siaAppId,
+            siaAppName: siaAppName || 'ReBit',
+            siaAppDescription: siaAppDescription || '',
+            siaConnected: false,
+          },
+        });
+      } catch (dbErr) {
+        console.error('Database unavailable for Sia config save, proceeding with registration anyway:', dbErr);
+        // If the database is not available (e.g. during initial setup before
+        // migrations have run), we still allow the registration to proceed.
+        // The config will be saved once the database is available.
+      }
     }
 
     // Check if backend is already connected (stored AppKey fast-path)

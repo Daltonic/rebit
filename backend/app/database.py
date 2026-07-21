@@ -55,9 +55,47 @@ async def get_db_optional() -> AsyncSession | None:
 
 
 async def init_db():
-    """Create all tables. Called on application startup."""
+    """Create all tables and run migrations. Called on application startup."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # ── Run pending migrations ────────────────────────────────────
+        # SQLAlchemy's create_all does NOT add new columns to existing tables.
+        # We need to run ALTER TABLE for any schema changes.
+
+        await conn.run_sync(_migrate_job_status_enum)
+        await conn.run_sync(_migrate_add_source_url)
+
+
+def _migrate_job_status_enum(conn):
+    """Add 'uploaded' to JobStatus enum if missing."""
+    from sqlalchemy import text
+
+    try:
+        conn.execute(
+            text("ALTER TYPE \"JobStatus\" ADD VALUE IF NOT EXISTS 'uploaded'")
+        )
+        import logging
+        logging.getLogger(__name__).info("Migration: added 'uploaded' to JobStatus enum")
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"Migration: JobStatus enum already had 'uploaded' or could not add: {e}")
+
+
+def _migrate_add_source_url(conn):
+    """Add source_url column to jobs table if it doesn't exist."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(conn)
+    columns = [c["name"] for c in inspector.get_columns("jobs")]
+
+    if "source_url" not in columns:
+        conn.execute(text("ALTER TABLE jobs ADD COLUMN source_url VARCHAR"))
+        import logging
+        logging.getLogger(__name__).info("Migration: added source_url column to jobs table")
+    else:
+        import logging
+        logging.getLogger(__name__).debug("Migration: source_url column already exists")
 
 
 async def close_db():
