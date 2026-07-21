@@ -64,8 +64,8 @@ async def transcribe_job(
         await _update_step(db, job_id, "transcribe", "running", 50, "Running Whisper transcription...")
 
         # Run Whisper via command line (falls back to OpenAI Whisper if installed)
-        vtt_path = settings.output_path / f"{job_id}.vtt"
-        json_path = settings.output_path / f"{job_id}.json"
+        vtt_path = settings.output_path / f"{job_id}_audio.vtt"
+        json_path = settings.output_path / f"{job_id}_audio.json"
 
         whisper_cmd = [
             "whisper", str(audio_path),
@@ -110,8 +110,12 @@ async def transcribe_job(
             else:
                 vtt_content = "WEBVTT\n\n"
 
-            # Build JSON from segments
-            json_content = {"text": vtt_content, "segments": []}
+            # Parse VTT segments into JSON structure for the detect stage
+            vtt_segments = _parse_vtt_segments(vtt_content)
+            json_content = {
+                "text": vtt_content,
+                "segments": vtt_segments,
+            }
             word_count = len(vtt_content.split())
             duration_seconds = _estimate_duration(vtt_content)
 
@@ -211,6 +215,52 @@ def _estimate_duration(vtt_content: str) -> int:
     last = times[-1]
     parts = last.split(":")
     return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(float(parts[2]))
+
+
+def _parse_vtt_segments(vtt_content: str) -> list[dict]:
+    """Parse VTT content into segment dictionaries with start, end, and text."""
+    segments = []
+    lines = vtt_content.strip().split("\n")
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Look for timestamp lines
+        if "-->" in line:
+            parts = line.split(" --> ")
+            if len(parts) == 2:
+                start = _parse_vtt_timestamp(parts[0])
+                end = _parse_vtt_timestamp(parts[1])
+
+                # Collect text until blank line
+                text_lines = []
+                i += 1
+                while i < len(lines) and lines[i].strip():
+                    text_lines.append(lines[i].strip())
+                    i += 1
+
+                text = " ".join(text_lines)
+                if text:
+                    segments.append({
+                        "start": start,
+                        "end": end,
+                        "text": text,
+                    })
+        i += 1
+
+    return segments
+
+
+def _parse_vtt_timestamp(ts: str) -> float:
+    """Parse a VTT timestamp to seconds."""
+    ts = ts.strip()
+    parts = ts.replace(",", ".").split(":")
+    if len(parts) == 3:
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    elif len(parts) == 2:
+        return int(parts[0]) * 60 + float(parts[1])
+    return 0.0
 
 
 def _generate_mock_transcript(job_id: str):
