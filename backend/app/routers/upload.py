@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import Job, PipelineStep
-from app.services.pipeline_orchestrator import run_pipeline_async
+from app.services.pipeline_orchestrator import start_pipeline_task
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["upload"])
@@ -137,7 +137,7 @@ async def upload_video(
     logger.info(f"Job {job_id} created for file: {file.filename} ({file_size} bytes)")
 
     # ── Trigger Pipeline (background) ────────────────────────────────────
-    asyncio.create_task(run_pipeline_async(job_id))
+    asyncio.create_task(start_pipeline_task(job_id))
     logger.info(f"Async pipeline started for job {job_id}")
 
     return {
