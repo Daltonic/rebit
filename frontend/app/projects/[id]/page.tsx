@@ -1,10 +1,11 @@
 'use client';
-import { use, useState, useEffect, useCallback } from 'react';
+import { use, useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import PipelineTracker from '@/components/PipelineTracker';
-import { ArrowLeft, ArrowRight, Loader2, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Loader2, Play, Trash2 } from 'lucide-react';
 import { PipelineStep, Segment } from '@/lib/types';
+import { usePipelineSSE } from '@/lib/hooks/usePipelineSSE';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
@@ -51,6 +52,8 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
 
   const fetchJobStatus = useCallback(async () => {
     try {
@@ -86,12 +89,64 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
     fetchJobStatus();
   }, [fetchJobStatus]);
 
-  // Poll for pipeline updates while job is in progress
-  // Use a longer interval (5s) and a ref to avoid re-creating the interval
-  // on every render, which can cause RangeError: Map maximum size exceeded
-  // in Next.js Turbopack's async hooks tracking.
+  // ── Real-time SSE updates (replaces polling) ──────────────────────────
+  // When SSE is active, pipeline steps update instantly as the backend
+  // processes each stage. Falls back to polling if SSE fails.
+  const [sseFailed, setSseFailed] = useState(false);
+
+  const handleStepUpdate = useCallback((step: { stage: string; status: string; progressPct: number; message: string }) => {
+    setJobData((prev) => {
+      if (!prev) return prev;
+      const steps = prev.pipelineSteps.map((s) =>
+        s.stage === step.stage
+          ? { ...s, status: step.status as PipelineStep['status'], progressPct: step.progressPct, message: step.message }
+          : s
+      );
+      // If step doesn't exist yet, add it
+      if (!steps.find((s) => s.stage === step.stage)) {
+        steps.push({
+          id: '',
+          jobId: prev.id,
+          stage: step.stage as PipelineStep['stage'],
+          status: step.status as PipelineStep['status'],
+          progressPct: step.progressPct,
+          message: step.message,
+          startedAt: null,
+          completedAt: null,
+        });
+      }
+      return { ...prev, pipelineSteps: steps };
+    });
+  }, []);
+
+  const handleJobStatus = useCallback((status: string, message: string) => {
+    setJobData((prev) => {
+      if (!prev) return prev;
+      return { ...prev, status };
+    });
+  }, []);
+
+  const handlePipelineComplete = useCallback(() => {
+    // Refresh full job data to get segments, logs, etc.
+    fetchJobStatus();
+  }, [fetchJobStatus]);
+
+  const handleSseError = useCallback((_error: string) => {
+    setSseFailed(true);
+  }, []);
+
+  usePipelineSSE({
+    jobId: jobData?.id,
+    onStepUpdate: handleStepUpdate,
+    onJobStatus: handleJobStatus,
+    onPipelineComplete: handlePipelineComplete,
+    onError: handleSseError,
+    enabled: !!jobData && !['complete', 'failed'].includes(jobData.status),
+  });
+
+  // ── Polling fallback (only if SSE fails) ──────────────────────────────
   useEffect(() => {
-    if (!jobData) return;
+    if (!jobData || !sseFailed) return;
 
     const terminalStatuses = ['complete', 'failed'];
     if (terminalStatuses.includes(jobData.status)) return;
@@ -101,13 +156,11 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         if (data && terminalStatuses.includes(data.status)) {
           clearInterval(interval);
         }
-      }).catch(() => {
-        // Silently ignore — the fetch function handles errors
-      });
+      }).catch(() => {});
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [jobData?.id, jobData?.status, fetchJobStatus]);
+  }, [jobData?.id, jobData?.status, fetchJobStatus, sseFailed]);
 
   if (loading) {
     return (
@@ -149,6 +202,33 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   const isComplete = jobData.status === 'complete';
   const isFailed = jobData.status === 'failed';
   const segmentCount = jobData.segments?.length ?? 0;
+
+  // Determine if the pipeline is stuck and can be resumed
+  const isRunning = steps.some((s) => s.status === 'running');
+  const canResume = !isComplete && !isRunning && !['uploading'].includes(jobData.status);
+
+  // Find the first non-complete stage to resume from
+  const firstIncompleteStage = steps.find((s) => s.status !== 'complete')?.stage ?? undefined;
+
+  const handleResume = async () => {
+    if (resuming) return;
+    setResuming(true);
+    setResumeError(null);
+    try {
+      const params = firstIncompleteStage ? `?start_from=${firstIncompleteStage}` : '';
+      const res = await fetch(`/api/jobs/${id}/start-pipeline${params}`);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to resume pipeline');
+      }
+      // Refresh job data after a short delay so the backend has time to update
+      setTimeout(() => fetchJobStatus(), 1000);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to resume pipeline';
+      setResumeError(message);
+      setResuming(false);
+    }
+  };
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
@@ -257,6 +337,29 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
                 </div>
               ))}
             </div>
+          )}
+
+          {/* Resume pipeline button — shown when pipeline is stuck */}
+          {canResume && !showDeleteConfirm && (
+            <button
+              onClick={handleResume}
+              disabled={resuming}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all"
+              style={{
+                background: 'rgba(124,58,237,0.1)',
+                border: '1px solid rgba(124,58,237,0.3)',
+                color: 'var(--accent-bright)',
+              }}>
+              {resuming ? (
+                <><Loader2 size={14} className="animate-spin" /> Resuming...</>
+              ) : (
+                <><Play size={14} /> Resume pipeline</>
+              )}
+            </button>
+          )}
+
+          {resumeError && (
+            <p className="text-xs text-center" style={{ color: 'var(--danger)' }}>{resumeError}</p>
           )}
 
           {/* Delete button */}

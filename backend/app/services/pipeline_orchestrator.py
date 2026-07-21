@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_factory
 from app.models import Job, PipelineStep
+from app.services.pipeline_events import publish_step_update, publish_job_status
 from app.services.sia_upload import upload_source_to_sia
 from app.services.transcribe import transcribe_job
 from app.services.detect import detect_highlights

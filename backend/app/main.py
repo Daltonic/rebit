@@ -111,27 +111,69 @@ async def health_check():
     )
 
 
-# ── SSE Events ───────────────────────────────────────────────────────────
+# ── Pipeline SSE Events ──────────────────────────────────────────────────
 
 import asyncio
 import json
+import logging
+
+from app.services.pipeline_events import subscribe as subscribe_events
+from app.models import Job, PipelineStep
+from app.database import async_session_factory
+from sqlalchemy import select
+
+sse_logger = logging.getLogger("sse")
 
 
-@app.get("/api/sia/events")
-async def sia_events():
+@app.get("/api/jobs/{job_id}/events")
+async def job_pipeline_events(job_id: str):
     """
-    SSE endpoint for real-time Sia status updates.
-    The frontend connects to this to receive live pipeline progress.
+    SSE endpoint for real-time pipeline progress.
+
+    The frontend connects to this to receive live pipeline updates
+    without polling. Events are pushed instantly as stages progress.
+
+    Event types:
+      - "connected": Sent on successful connection.
+      - "step_update": Pipeline step progress changed.
+      - "job_status": Overall job status changed.
+      - "pipeline_complete": All stages finished.
+      - "keepalive": Sent every 30s to keep connection alive.
+
+    Falls back to polling (5s interval) if SSE is unavailable.
     """
     async def event_generator():
         try:
-            while True:
-                # In a real implementation, this would read from a
-                # pub/sub channel or queue. For now, send keepalive.
-                data = json.dumps({"type": "keepalive", "timestamp": asyncio.get_event_loop().time()})
-                yield f"data: {data}\n\n"
-                await asyncio.sleep(15)
+            # Send initial state so the frontend has immediate data
+            try:
+                async with async_session_factory() as db:
+                    result = await db.execute(select(Job).where(Job.id == job_id))
+                    job = result.scalar_one_or_none()
+                    if job:
+                        yield {'data': json.dumps({'type': 'job_status', 'status': job.status, 'message': ''})}
+
+                        steps_result = await db.execute(
+                            select(PipelineStep)
+                            .where(PipelineStep.job_id == job_id)
+                            .order_by(PipelineStep.started_at.asc().nullsfirst(), PipelineStep.stage)
+                        )
+                        for step in steps_result.scalars().all():
+                            yield {'data': json.dumps({
+                                'type': 'step_update',
+                                'stage': step.stage,
+                                'status': step.status,
+                                'progressPct': step.progress_pct,
+                                'message': step.message,
+                            })}
+            except Exception as e:
+                sse_logger.warning(f"Could not send initial state for {job_id}: {e}")
+
+            # Stream live events
+            async for event in subscribe_events(job_id):
+                yield {'data': json.dumps(event)}
+
         except asyncio.CancelledError:
+            sse_logger.debug(f"SSE connection closed for job {job_id}")
             pass
 
     return EventSourceResponse(event_generator())
