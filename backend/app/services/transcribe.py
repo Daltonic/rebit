@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Job, Transcript, PipelineStep
-from app.database import async_session_factory
+from app.services.pipeline_steps import upsert_pipeline_step
 
 
 async def transcribe_job(
@@ -37,7 +37,7 @@ async def transcribe_job(
     if not job:
         return {"passed": False, "message": f"Job {job_id} not found"}
 
-    await _update_step(db, job_id, "transcribe", "running", 10, "Starting transcription...")
+    await upsert_pipeline_step(db, job_id, "transcribe", "running", 10, "Starting transcription...")
 
     # Locate video file
     video_path = settings.upload_path / f"{job_id}.mp4"
@@ -47,7 +47,7 @@ async def transcribe_job(
         return {"passed": False, "message": f"Video file not found for job {job_id}"}
 
     try:
-        await _update_step(db, job_id, "transcribe", "running", 30, "Extracting audio...")
+        await upsert_pipeline_step(db, job_id, "transcribe", "running", 30, "Extracting audio...")
 
         # Extract audio using ffmpeg
         audio_path = settings.output_path / f"{job_id}_audio.wav"
@@ -61,7 +61,7 @@ async def transcribe_job(
         ]
         subprocess.run(ffmpeg_cmd, capture_output=True, timeout=300)
 
-        await _update_step(db, job_id, "transcribe", "running", 50, "Running Whisper transcription...")
+        await upsert_pipeline_step(db, job_id, "transcribe", "running", 50, "Running Whisper transcription...")
 
         # Run Whisper via command line (falls back to OpenAI Whisper if installed)
         vtt_path = settings.output_path / f"{job_id}_audio.vtt"
@@ -119,7 +119,7 @@ async def transcribe_job(
             word_count = len(vtt_content.split())
             duration_seconds = _estimate_duration(vtt_content)
 
-        await _update_step(db, job_id, "transcribe", "running", 80, "Saving transcript...")
+        await upsert_pipeline_step(db, job_id, "transcribe", "running", 80, "Saving transcript...")
 
         # Save transcript to DB
         existing = await db.execute(select(Transcript).where(Transcript.job_id == job_id))
@@ -141,10 +141,13 @@ async def transcribe_job(
 
         await db.flush()
 
-        await _update_step(db, job_id, "transcribe", "complete", 100, "Transcription complete")
+        await upsert_pipeline_step(db, job_id, "transcribe", "complete", 100, "Transcription complete")
 
-        # Update job status
-        job.status = "transcribing"
+        # NOTE: job.status is no longer set here. The orchestrator is the
+        # single place that maps a running stage to job.status (see
+        # STAGE_TO_JOB_STATUS in pipeline_steps.py) — that's what fixes the
+        # frontend showing a stale "Upload complete" status while a later
+        # stage was actually running.
 
         return {
             "passed": True,
@@ -154,48 +157,11 @@ async def transcribe_job(
         }
 
     except subprocess.TimeoutExpired:
-        await _update_step(db, job_id, "transcribe", "failed", 0, "Transcription timed out")
+        await upsert_pipeline_step(db, job_id, "transcribe", "failed", 0, "Transcription timed out")
         return {"passed": False, "message": "Transcription timed out after 10 minutes"}
     except Exception as e:
-        await _update_step(db, job_id, "transcribe", "failed", 0, f"Transcription failed: {str(e)}")
+        await upsert_pipeline_step(db, job_id, "transcribe", "failed", 0, f"Transcription failed: {str(e)}")
         return {"passed": False, "message": f"Transcription failed: {str(e)}"}
-
-
-async def _update_step(
-    db: AsyncSession,
-    job_id: str,
-    stage: str,
-    status: str,
-    progress_pct: int,
-    message: str,
-):
-    """Create or update a pipeline step record."""
-    now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(PipelineStep).where(
-            PipelineStep.job_id == job_id,
-            PipelineStep.stage == stage,
-        )
-    )
-    step = result.scalar_one_or_none()
-
-    if step:
-        step.status = status
-        step.progress_pct = progress_pct
-        step.message = message
-        if status == "running" and not step.started_at:
-            step.started_at = now
-        if status in ("complete", "failed"):
-            step.completed_at = now
-    else:
-        db.add(PipelineStep(
-            job_id=job_id,
-            stage=stage,
-            status=status,
-            progress_pct=progress_pct,
-            message=message,
-            started_at=now if status == "running" else None,
-        ))
 
 
 def _format_vtt_time(seconds: float) -> str:

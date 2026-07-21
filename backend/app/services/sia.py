@@ -22,6 +22,7 @@ from sia_storage import PinnedObject
 from app.config import settings
 from app.models import Job, Segment, Transcript, SiaLog, PipelineStep
 from app.services import sia_client
+from app.services.pipeline_steps import upsert_pipeline_step
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ async def store_job_artifacts(
     if not job:
         return {"passed": False, "message": f"Job {job_id} not found"}
 
-    await _update_step(db, job_id, "sia_store", "running", 10, "Starting Sia storage...")
+    await upsert_pipeline_step(db, job_id, "sia_store", "running", 10, "Starting Sia storage...")
 
     try:
         # Check if Sia SDK is ready
@@ -57,7 +58,7 @@ async def store_job_artifacts(
             return await _demo_store(job_id, job, db)
 
         # Live mode — use SDK
-        await _update_step(db, job_id, "sia_store", "running", 30, "Uploading transcript to Sia...")
+        await upsert_pipeline_step(db, job_id, "sia_store", "running", 30, "Uploading transcript to Sia...")
 
         # Step 1: Upload transcript
         transcript_result = await db.execute(
@@ -73,7 +74,7 @@ async def store_job_artifacts(
             await _add_sia_log(db, job_id, "upload_transcript", True, f"Transcript uploaded: {uploaded.id()}")
 
         # Step 2: Upload rendered clips
-        await _update_step(db, job_id, "sia_store", "running", 50, "Uploading clips to Sia...")
+        await upsert_pipeline_step(db, job_id, "sia_store", "running", 50, "Uploading clips to Sia...")
         segments_result = await db.execute(
             select(Segment).where(
                 Segment.job_id == job_id,
@@ -92,7 +93,7 @@ async def store_job_artifacts(
                 await _add_sia_log(db, job_id, "upload_clip", True, f"Clip uploaded: {uploaded.id()}")
 
         # Step 3: Upload source video
-        await _update_step(db, job_id, "sia_store", "running", 70, "Uploading source video to Sia...")
+        await upsert_pipeline_step(db, job_id, "sia_store", "running", 70, "Uploading source video to Sia...")
         video_path = settings.upload_path / f"{job_id}.mp4"
         if not video_path.exists():
             video_path = settings.upload_path / job.source_filename
@@ -105,7 +106,7 @@ async def store_job_artifacts(
             await _add_sia_log(db, job_id, "upload_source", True, f"Source uploaded: {uploaded.id()}")
 
         # Step 4: Pin all objects
-        await _update_step(db, job_id, "sia_store", "running", 85, "Pinning objects on Sia...")
+        await upsert_pipeline_step(db, job_id, "sia_store", "running", 85, "Pinning objects on Sia...")
         all_object_ids = []
         if transcript and transcript.sia_object_id:
             all_object_ids.append(transcript.sia_object_id)
@@ -127,10 +128,13 @@ async def store_job_artifacts(
             job.sia_hash = all_object_ids[0]
             job.sia_status = "ready"
 
-        await _update_step(db, job_id, "sia_store", "complete", 100, "Sia storage complete")
+        await upsert_pipeline_step(db, job_id, "sia_store", "complete", 100, "Sia storage complete")
 
-        # Update job status
-        job.status = "complete"
+        # NOTE: job.status = "complete" is set by the orchestrator once ALL
+        # stages finish (pipeline_orchestrator.py), not here. sia_store
+        # happens to be the last stage today, but stage code shouldn't be
+        # the one deciding "the whole pipeline is done" — that's an
+        # orchestrator-level fact, not a stage-level one.
 
         return {
             "passed": True,
@@ -140,7 +144,7 @@ async def store_job_artifacts(
         }
 
     except Exception as e:
-        await _update_step(db, job_id, "sia_store", "failed", 0, f"Sia storage failed: {str(e)}")
+        await upsert_pipeline_step(db, job_id, "sia_store", "failed", 0, f"Sia storage failed: {str(e)}")
         await _add_sia_log(db, job_id, "store", False, str(e))
         return {"passed": False, "message": f"Sia storage failed: {str(e)}"}
 
@@ -152,7 +156,7 @@ async def _demo_store(
     reason: str = "Sia not connected — demo mode",
 ) -> dict:
     """Store artifacts with demo (fake) Sia hashes."""
-    await _update_step(db, job_id, "sia_store", "running", 50, f"Demo mode: {reason}")
+    await upsert_pipeline_step(db, job_id, "sia_store", "running", 50, f"Demo mode: {reason}")
 
     # Create demo hashes
     demo_hash = f"{DEMO_PREFIX}{job_id}"
@@ -177,10 +181,7 @@ async def _demo_store(
 
     await _add_sia_log(db, job_id, "demo_store", True, f"Demo storage complete: {demo_hash}")
 
-    await _update_step(db, job_id, "sia_store", "complete", 100, "Demo storage complete")
-
-    # Update job status
-    job.status = "complete"
+    await upsert_pipeline_step(db, job_id, "sia_store", "complete", 100, "Demo storage complete")
 
     return {
         "passed": True,
@@ -204,40 +205,3 @@ async def _add_sia_log(
         passed=passed,
         message=message,
     ))
-
-
-async def _update_step(
-    db: AsyncSession,
-    job_id: str,
-    stage: str,
-    status: str,
-    progress_pct: int,
-    message: str,
-):
-    """Create or update a pipeline step record."""
-    now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(PipelineStep).where(
-            PipelineStep.job_id == job_id,
-            PipelineStep.stage == stage,
-        )
-    )
-    step = result.scalar_one_or_none()
-
-    if step:
-        step.status = status
-        step.progress_pct = progress_pct
-        step.message = message
-        if status == "running" and not step.started_at:
-            step.started_at = now
-        if status in ("complete", "failed"):
-            step.completed_at = now
-    else:
-        db.add(PipelineStep(
-            job_id=job_id,
-            stage=stage,
-            status=status,
-            progress_pct=progress_pct,
-            message=message,
-            started_at=now if status == "running" else None,
-        ))

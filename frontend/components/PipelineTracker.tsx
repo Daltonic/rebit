@@ -39,6 +39,10 @@ function elapsed(start: string | null, end: string | null) {
 export default function PipelineTracker({ steps, jobId, onRetry }: { steps: PipelineStep[]; jobId?: string; onRetry?: (stage: string) => void }) {
   const stepMap = Object.fromEntries(steps.map(s => [s.stage, s]));
   const [retryingStage, setRetryingStage] = useState<string | null>(null);
+  // Stays set for 5s after a retry request finishes (success or failure),
+  // so a fast response can't be raced by an immediate second click before
+  // the backend's state has actually changed.
+  const [cooldownStage, setCooldownStage] = useState<string | null>(null);
 
   // Determine which stage is currently active (the first non-complete stage)
   const activeStageIdx = STAGES.findIndex(({ key }) => {
@@ -47,16 +51,24 @@ export default function PipelineTracker({ steps, jobId, onRetry }: { steps: Pipe
   });
 
   const handleRetry = async (stage: string) => {
-    if (!jobId) return;
+    if (!jobId || retryingStage || cooldownStage === stage) return;
     setRetryingStage(stage);
     try {
       const res = await fetch(`${BACKEND_URL}/api/jobs/${jobId}/start-pipeline?start_from=${stage}`);
+      const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error('Failed to retry');
+      if (data?.status === 'already_running') {
+        // The backend's per-job lock rejected this — a pipeline task is
+        // already running, so there's nothing more for this click to do.
+        console.info(`Pipeline already running for job ${jobId}, retry was a no-op`);
+      }
       if (onRetry) onRetry(stage);
     } catch (e) {
       console.error('Retry failed:', e);
     } finally {
       setRetryingStage(null);
+      setCooldownStage(stage);
+      setTimeout(() => setCooldownStage((s) => (s === stage ? null : s)), 5000);
     }
   };
 
@@ -131,13 +143,13 @@ export default function PipelineTracker({ steps, jobId, onRetry }: { steps: Pipe
                 {status === 'failed' && jobId && (
                   <button
                     onClick={() => handleRetry(key)}
-                    disabled={isRetrying}
+                    disabled={isRetrying || cooldownStage === key}
                     className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-[1.02]"
                     style={{
                       background: 'rgba(124,58,237,0.1)',
                       border: '1px solid rgba(124,58,237,0.25)',
                       color: 'var(--accent-bright)',
-                      opacity: isRetrying ? 0.6 : 1,
+                      opacity: (isRetrying || cooldownStage === key) ? 0.6 : 1,
                     }}>
                     {isRetrying ? (
                       <><Loader2 size={11} className="animate-spin" /> Retrying...</>

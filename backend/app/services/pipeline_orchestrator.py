@@ -12,18 +12,28 @@ Coordinates the full pipeline execution for a job:
 Each step updates the pipeline_steps table with progress so the frontend
 can poll for real-time status updates. Stages run sequentially — each
 stage must complete before the next one begins.
+
+── Concurrency ───────────────────────────────────────────────────────────
+`start_pipeline_task()` is the ONLY supported way to kick off pipeline
+execution. It atomically acquires a per-job lock (Job.pipeline_lock_at)
+before spawning the background task, so calling it twice in a row for
+the same job — e.g. the auto-start after upload racing a user's "Resume
+pipeline" click — results in exactly one execution, not two or three
+running concurrently against the same rows. See PIPELINE_LOCK_STALE_AFTER
+below for what happens if a run crashes without releasing the lock.
 """
 
+import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_factory
 from app.models import Job, PipelineStep
-from app.services.pipeline_events import publish_step_update, publish_job_status
+from app.services.pipeline_steps import upsert_pipeline_step, STAGE_TO_JOB_STATUS
 from app.services.sia_upload import upload_source_to_sia
 from app.services.transcribe import transcribe_job
 from app.services.detect import detect_highlights
@@ -75,6 +85,88 @@ STAGES = [
     },
 ]
 
+# If a lock is older than this, treat it as abandoned (the process that
+# held it almost certainly crashed or was killed) and allow re-acquisition
+# rather than wedging the job forever. Generously above the sum of every
+# stage's own internal timeout (transcribe: 10min, detect: 5min, ffmpeg
+# steps: a few minutes each).
+PIPELINE_LOCK_STALE_AFTER = timedelta(minutes=20)
+
+
+async def _try_acquire_lock(job_id: str) -> bool:
+    """
+    Atomically claim the pipeline lock for a job.
+
+    This is a single UPDATE with the acquisition condition in the WHERE
+    clause, not a SELECT followed by an UPDATE — that gap is exactly what
+    let multiple pipeline tasks run concurrently before. Only one caller
+    can ever have their UPDATE match the row (Postgres serializes
+    concurrent UPDATEs to the same row), so only one caller gets
+    rowcount == 1 back.
+    """
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - PIPELINE_LOCK_STALE_AFTER
+
+    async with async_session_factory() as db:
+        result = await db.execute(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                or_(Job.pipeline_lock_at.is_(None), Job.pipeline_lock_at < stale_cutoff),
+            )
+            .values(pipeline_lock_at=now)
+        )
+        await db.commit()
+        return result.rowcount > 0
+
+
+async def _release_lock(job_id: str) -> None:
+    """Release the pipeline lock so a future run (retry, next stage) can proceed."""
+    async with async_session_factory() as db:
+        await db.execute(
+            update(Job).where(Job.id == job_id).values(pipeline_lock_at=None)
+        )
+        await db.commit()
+
+
+async def start_pipeline_task(job_id: str, start_from: Optional[str] = None) -> dict:
+    """
+    Public entry point for launching pipeline execution in the background.
+
+    Safe to call multiple times concurrently for the same job — e.g. the
+    auto-start right after upload racing a "Resume pipeline" click. Only
+    the caller that wins the lock actually spawns a task; everyone else
+    gets {"started": False} back immediately and does nothing further.
+
+    This replaces the old pattern of every call site doing its own
+    `asyncio.create_task(run_pipeline_async(job_id))`, which had no
+    coordination between call sites at all.
+    """
+    acquired = await _try_acquire_lock(job_id)
+    if not acquired:
+        logger.info(f"Pipeline already running for job {job_id}; ignoring duplicate start request")
+        return {"started": False, "message": "Pipeline is already running for this job"}
+
+    asyncio.create_task(_run_locked(job_id, start_from))
+    return {"started": True, "message": f"Pipeline started from stage: {start_from or 'beginning'}"}
+
+
+async def _run_locked(job_id: str, start_from: Optional[str]) -> None:
+    """Runs the pipeline, guaranteeing the lock is released no matter what happens."""
+    try:
+        async with async_session_factory() as db:
+            result = await run_pipeline(job_id, db, start_from)
+            await db.commit()
+
+            if result["passed"]:
+                logger.info(f"Pipeline completed successfully for job {job_id}")
+            else:
+                logger.error(f"Pipeline failed for job {job_id}: {result['message']}")
+    except Exception as e:
+        logger.error(f"Pipeline crashed for job {job_id}: {e}")
+    finally:
+        await _release_lock(job_id)
+
 
 async def run_pipeline(
     job_id: str,
@@ -83,6 +175,10 @@ async def run_pipeline(
 ) -> dict:
     """
     Run the full pipeline for a job, executing each stage sequentially.
+
+    This function assumes the caller already holds the pipeline lock for
+    this job (start_pipeline_task() guarantees that). It should not be
+    called directly from request handlers — use start_pipeline_task().
 
     Args:
         job_id: The job ID to process.
@@ -135,31 +231,14 @@ async def run_pipeline(
             logger.info(f"Stage '{stage_name}' already complete for job {job_id}, skipping")
             continue
 
-        # ── Get or create the step record ────────────────────────────────
-        step_result = await db.execute(
-            select(PipelineStep).where(
-                PipelineStep.job_id == job_id,
-                PipelineStep.stage == stage_name,
-            )
+        # ── Mark as running. reset_started_at=True because this is a genuine
+        # (re)start of the stage — if a previous attempt failed, its stale
+        # started_at should not be counted toward this attempt's elapsed time.
+        await upsert_pipeline_step(
+            db, job_id, stage_name, "running", 5, stage_def["description"],
+            reset_started_at=True,
         )
-        step = step_result.scalar_one_or_none()
-
-        if not step:
-            step = PipelineStep(
-                job_id=job_id,
-                stage=stage_name,
-                status="pending",
-                progress_pct=0,
-                message=f"Waiting for {stage_def['description']}",
-            )
-            db.add(step)
-            await db.flush()
-
-        # ── Mark as running (ALWAYS do this, even for newly created steps) ──
-        step.status = "running"
-        step.started_at = datetime.now(timezone.utc)
-        step.progress_pct = 5
-        step.message = stage_def["description"]
+        job.status = STAGE_TO_JOB_STATUS.get(stage_name, job.status)
         await db.flush()
         logger.info(f"Stage '{stage_name}' now running for job {job_id}")
 
@@ -172,6 +251,8 @@ async def run_pipeline(
             else:
                 error_msg = result.get("message", f"Stage '{stage_name}' failed")
                 logger.error(f"Pipeline stage '{stage_name}' failed for job {job_id}: {error_msg}")
+                job.status = "failed"
+                await db.flush()
                 return {
                     "passed": False,
                     "message": error_msg,
@@ -180,10 +261,10 @@ async def run_pipeline(
 
         except Exception as e:
             logger.error(f"Pipeline stage '{stage_name}' threw exception for job {job_id}: {e}")
-            step.status = "failed"
-            step.progress_pct = 0
-            step.message = f"Failed: {str(e)[:200]}"
-            step.completed_at = datetime.now(timezone.utc)
+            await upsert_pipeline_step(
+                db, job_id, stage_name, "failed", 0, f"Failed: {str(e)[:200]}",
+            )
+            job.status = "failed"
             await db.flush()
 
             return {
@@ -201,24 +282,3 @@ async def run_pipeline(
         "passed": True,
         "message": "All pipeline stages completed successfully",
     }
-
-
-async def run_pipeline_async(job_id: str, start_from: Optional[str] = None):
-    """
-    Run the pipeline in the background (non-blocking).
-
-    Creates its own database session so it doesn't hold up the request.
-    This is used by the upload endpoint to kick off the pipeline without
-    waiting for it to finish.
-    """
-    try:
-        async with async_session_factory() as db:
-            result = await run_pipeline(job_id, db, start_from)
-            await db.commit()
-
-            if result["passed"]:
-                logger.info(f"Async pipeline completed successfully for job {job_id}")
-            else:
-                logger.error(f"Async pipeline failed for job {job_id}: {result['message']}")
-    except Exception as e:
-        logger.error(f"Async pipeline crashed for job {job_id}: {e}")

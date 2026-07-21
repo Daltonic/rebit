@@ -10,7 +10,6 @@ using a multi-strategy approach:
 Features:
   - Granular per-segment progress reporting
   - Timeout protection (configurable per-stage)
-  - Transaction-safe progress updates (separate session for writes)
   - Nearby segment merging
   - User-configurable sensitivity
   - Creates Segment records in the database.
@@ -28,8 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Job, Segment, Transcript, PipelineStep
-from app.database import async_session_factory
-from app.services.pipeline_events import publish_step_update, publish_job_status
+from app.services.pipeline_steps import upsert_pipeline_step
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +112,12 @@ async def detect_highlights(
         )
     except asyncio.TimeoutError:
         logger.error(f"Highlight detection timed out for job {job_id} after {DETECT_TIMEOUT_SECONDS}s")
-        await _update_step_safe(job_id, "detect", "failed", 0,
+        await upsert_pipeline_step(db, job_id, "detect", "failed", 0,
                                 f"Detection timed out after {DETECT_TIMEOUT_SECONDS}s. Try a shorter video.")
         return {"passed": False, "message": f"Highlight detection timed out after {DETECT_TIMEOUT_SECONDS}s"}
     except Exception as e:
         logger.exception(f"Highlight detection crashed for job {job_id}: {e}")
-        await _update_step_safe(job_id, "detect", "failed", 0, f"Detection failed: {str(e)[:200]}")
+        await upsert_pipeline_step(db, job_id, "detect", "failed", 0, f"Detection failed: {str(e)[:200]}")
         return {"passed": False, "message": f"Highlight detection failed: {str(e)}"}
 
 
@@ -142,7 +140,7 @@ async def _detect_highlights_impl(
     if not transcript:
         return {"passed": False, "message": f"Transcript not found for job {job_id}"}
 
-    await _update_step_safe(job_id, "detect", "running", 5,
+    await upsert_pipeline_step(db, job_id, "detect", "running", 5,
                             "Loading transcript and preparing analysis...")
 
     try:
@@ -162,8 +160,8 @@ async def _detect_highlights_impl(
         total_segments = len(raw_segments)
         logger.info(f"Analyzing {total_segments} segments for job {job_id}")
 
-        await _update_step_safe(
-            job_id, "detect", "running", 10,
+        await upsert_pipeline_step(
+            db, job_id, "detect", "running", 10,
             f"Analyzing {total_segments} segments with heuristic engine..."
         )
 
@@ -199,8 +197,8 @@ async def _detect_highlights_impl(
             if total_segments > 0:
                 pct = int(10 + (idx / total_segments) * 30)  # 10% → 40%
                 if idx % max(1, total_segments // 20) == 0:
-                    await _update_step_safe(
-                        job_id, "detect", "running", min(pct, 40),
+                    await upsert_pipeline_step(
+                        db, job_id, "detect", "running", min(pct, 40),
                         f"Analyzing segment {idx + 1}/{total_segments}..."
                     )
 
@@ -214,8 +212,8 @@ async def _detect_highlights_impl(
         llm_enhanced = False
         if settings.openrouter_key:
             try:
-                await _update_step_safe(
-                    job_id, "detect", "running", 45,
+                await upsert_pipeline_step(
+                    db, job_id, "detect", "running", 45,
                     "Running LLM-based quality analysis..."
                 )
                 analyzed_segments = await _enhance_with_llm(
@@ -225,12 +223,12 @@ async def _detect_highlights_impl(
                 logger.info(f"LLM enhancement completed for job {job_id}")
             except Exception as e:
                 logger.warning(f"LLM enhancement failed, using heuristic results: {e}")
-                await _update_step_safe(
-                    job_id, "detect", "running", 50,
+                await upsert_pipeline_step(
+                    db, job_id, "detect", "running", 50,
                     "LLM analysis unavailable, using heuristic results..."
                 )
 
-        await _update_step_safe(job_id, "detect", "running", 70,
+        await upsert_pipeline_step(db, job_id, "detect", "running", 70,
                                 "Merging nearby segments and ranking...")
 
         # ── Phase 3: Merge nearby segments ───────────────────────────────
@@ -249,7 +247,7 @@ async def _detect_highlights_impl(
             step = max(1, len(merged_segments) // MAX_SEGMENTS)
             top_segments = [merged_segments[i] for i in range(0, len(merged_segments), step)][:MAX_SEGMENTS]
 
-        await _update_step_safe(job_id, "detect", "running", 85,
+        await upsert_pipeline_step(db, job_id, "detect", "running", 85,
                                 f"Saving {len(top_segments)} highlight segments...")
 
         # ── Phase 5: Save to database ────────────────────────────────────
@@ -272,13 +270,13 @@ async def _detect_highlights_impl(
         await db.flush()
 
         total_elapsed = time.monotonic() - start_time
-        await _update_step_safe(
-            job_id, "detect", "complete", 100,
+        await upsert_pipeline_step(
+            db, job_id, "detect", "complete", 100,
             f"Detected {len(top_segments)} highlight segments in {total_elapsed:.1f}s"
         )
 
-        # Update job status
-        job.status = "detecting"
+        # NOTE: job.status is no longer set here — see the note in
+        # transcribe.py. The orchestrator owns job.status.
 
         return {
             "passed": True,
@@ -290,7 +288,7 @@ async def _detect_highlights_impl(
 
     except Exception as e:
         logger.exception(f"Highlight detection failed for job {job_id}: {e}")
-        await _update_step_safe(job_id, "detect", "failed", 0,
+        await upsert_pipeline_step(db, job_id, "detect", "failed", 0,
                                 f"Detection failed: {str(e)[:200]}")
         return {"passed": False, "message": f"Highlight detection failed: {str(e)}"}
 
@@ -624,57 +622,3 @@ def _parse_vtt_timestamp(ts: str) -> float:
     elif len(parts) == 2:
         return int(parts[0]) * 60 + float(parts[1])
     return 0.0
-
-
-async def _update_step_safe(
-    job_id: str,
-    stage: str,
-    status: str,
-    progress_pct: int,
-    message: str,
-):
-    """
-    Update pipeline step progress using a SEPARATE database session.
-
-    This avoids transaction deadlocks that can occur when the main
-    pipeline session and progress updates compete for the same rows.
-
-    ALSO publishes real-time SSE events so the frontend updates instantly.
-    """
-    try:
-        async with async_session_factory() as progress_db:
-            now = datetime.now(timezone.utc)
-            result = await progress_db.execute(
-                select(PipelineStep).where(
-                    PipelineStep.job_id == job_id,
-                    PipelineStep.stage == stage,
-                )
-            )
-            step = result.scalar_one_or_none()
-
-            if step:
-                step.status = status
-                step.progress_pct = progress_pct
-                step.message = message
-                if status == "running" and not step.started_at:
-                    step.started_at = now
-                if status in ("complete", "failed"):
-                    step.completed_at = now
-            else:
-                progress_db.add(PipelineStep(
-                    job_id=job_id,
-                    stage=stage,
-                    status=status,
-                    progress_pct=progress_pct,
-                    message=message,
-                    started_at=now if status == "running" else None,
-                ))
-
-            await progress_db.commit()
-
-        # Publish real-time SSE event (fire-and-forget, non-blocking)
-        await publish_step_update(job_id, stage, status, progress_pct, message)
-
-    except Exception as e:
-        # Don't let progress update failures crash the pipeline
-        logger.warning(f"Failed to update progress for {job_id}/{stage}: {e}")
