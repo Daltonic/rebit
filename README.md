@@ -16,8 +16,8 @@ Upload a video file or paste a URL and watch it move through 5 automated process
 
 - **File Upload**: Drag-and-drop or file picker for MP4, MOV, WebM, MKV (up to 5 GB)
 - **URL Import**: Import videos from YouTube, Vimeo, TikTok, Twitter/X, and more
-- **Transcription**: Speech-to-text via OpenAI Whisper (local)
-- **Highlight Detection**: AI-powered analysis to find engaging moments
+- **Transcription**: Speech-to-text via Whisper
+- **Highlight Detection**: Heuristic analysis to find engaging moments based on hook strength, virality scoring, and emotional signals
 - **Clip Extraction**: FFmpeg-based video segment extraction
 - **Vertical Render**: 9:16 format conversion for short-form platforms
 - **Sia Storage**: All artifacts stored on Sia decentralized network
@@ -29,7 +29,7 @@ Upload a video file or paste a URL and watch it move through 5 automated process
 | # | Stage | What it does |
 |---|-------|-------------|
 | 1 | Transcription | Extracts audio and runs Whisper speech-to-text, generating VTT and JSON transcripts |
-| 2 | Highlight Detection | Analyzes transcript for hook strength, virality score, and emotional signals; creates Segment records |
+| 2 | Highlight Detection | Analyzes transcript for hook strength, virality score, and emotional signals using heuristic analysis; creates Segment records |
 | 3 | Clip Extraction | Uses FFmpeg to cut video segments based on detected highlights |
 | 4 | Vertical Render | Converts clips to 9:16 aspect ratio for TikTok, Instagram Reels, YouTube Shorts |
 | 5 | Sia Storage | Uploads all artifacts (source video, transcript, clips) to Sia Network for immutable storage |
@@ -43,7 +43,8 @@ Upload a video file or paste a URL and watch it move through 5 automated process
 | Frontend | Next.js 16, TypeScript, TailwindCSS, NextAuth.js |
 | Backend | Python (FastAPI), SQLAlchemy, PostgreSQL |
 | Event Pipeline | Inngest (durable functions) |
-| Transcription | OpenAI Whisper (local) |
+| Transcription | Whisper (local) |
+| Highlight Analysis | Multi-strategy heuristic engine (keyword, position, emotional signals) |
 | Video Processing | FFmpeg |
 | Storage | Sia Network via `sia-storage` SDK |
 | ORM | Prisma (frontend-owned schema) |
@@ -65,7 +66,6 @@ docker compose up --build
 | Backend | http://localhost:8000 | FastAPI pipeline executor |
 | Inngest | http://localhost:8288 | Event-driven pipeline UI |
 | PostgreSQL | localhost:5432 | Database |
-| Ollama | localhost:11434 | Local embeddings (for future features) |
 
 **No environment variables needed.** All configuration is handled through the browser-based Setup Wizard on first boot. Open http://localhost:3000 and complete the 3-step wizard:
 
@@ -89,12 +89,10 @@ Create your local env files:
 # Frontend — only the database URL is required (everything else has defaults)
 cat > frontend/.env << 'ENV'
 DATABASE_URL=postgresql://rebit:rebit@localhost:5432/rebit
-INNGEST_DEV=1
-INNGEST_EVENT_KEY=local
-INNGEST_SIGNING_KEY=local
-INNGEST_BASE_URL=http://localhost:8288
-NEXT_TELEMETRY_DISABLED=1
+AUTH_URL=http://localhost:3000
 BACKEND_URL=http://localhost:8000
+SIA_MODE=auto
+SIA_KEY_PATH=/tmp/sia/appkey.hex
 ENV
 
 # Backend — use the example as-is (or tweak ports)
@@ -102,11 +100,11 @@ cat > backend/.env << 'ENV'
 DATABASE_URL=postgresql+asyncpg://rebit:rebit@localhost:5432/rebit
 CORS_ORIGINS="http://localhost:3000"
 SIA_MODE="auto"
-SIA_KEY_PATH="/tmp/sia/appkey.hex"
+SIA_KEY_PATH="data/sia/appkey.hex"
 WHISPER_MODEL="base"
 WHISPER_DEVICE="cpu"
-UPLOAD_DIR="/tmp/rebit/uploads"
-OUTPUT_DIR="/tmp/rebit/output"
+UPLOAD_DIR="data/uploads"
+OUTPUT_DIR="data/output"
 DEBUG=false
 ENV
 ```
@@ -115,7 +113,7 @@ That's it. The frontend `.env` above is the complete set of variables needed for
 
 #### 2. Start services individually
 
-> **Prerequisite:** Dev mode requires **PostgreSQL** and **Ollama** already running on your machine. Make sure both are up before starting the application servers. If you don't have them running yet, start them first:
+> **Prerequisite:** Dev mode requires **PostgreSQL** already running on your machine. Make sure it is up before starting the application servers. If you don't have it running yet, start it first:
 
 ```bash
 # Terminal 1 — PostgreSQL
@@ -125,32 +123,23 @@ docker run -d --name rebit_pg \
   -e POSTGRES_DB=rebit \
   -p 5432:5432 \
   postgres:16-alpine
-
-# Terminal 2 — Ollama
-docker run -d --name rebit_ollama \
-  -p 11434:11434 \
-  -v ollama_data:/root/.ollama \
-  ollama/ollama:latest
-
-# Pull the embedding model (optional, for future features)
-docker exec rebit_ollama ollama pull nomic-embed-text
 ```
 
-Once PostgreSQL and Ollama are confirmed running, start the remaining services in separate terminals:
+Once PostgreSQL is confirmed running, start the remaining services in separate terminals:
 
 ```bash
-# Terminal 3 — Inngest
+# Terminal 2 — Inngest
 npx inngest-cli@latest dev \
   -u http://localhost:3000/api/inngest \
   --no-discovery --no-poll --persist
 
-# Terminal 4 — Backend
+# Terminal 3 — Backend
 cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-# Terminal 5 — Frontend
+# Terminal 4 — Frontend
 cd frontend
 npm install
 npm run dev
@@ -182,7 +171,7 @@ All values are stored in the `AppSettings` database table and read back on subse
 ### Stopping
 
 - **Docker:** `docker compose down`
-- **Manual:** Press `Ctrl+C` in each terminal. Data persists in `/tmp/rebit/` (Sia keys, uploads, output) and Docker volumes (Postgres data, Ollama models).
+- **Manual:** Press `Ctrl+C` in each terminal. Data persists in Docker volumes (Postgres data) and local data directories.
 
 ---
 
@@ -206,8 +195,10 @@ If you skip the wizard or Sia is unreachable, the platform runs in **demo mode**
 
 ```
 rebit/
-├── docker-compose.yml            # 5-service orchestration
+├── docker-compose.yml            # 4-service orchestration
 ├── README.md
+├── note.txt
+├── docs/                         # Additional documentation
 ├── backend/
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -226,12 +217,15 @@ rebit/
 │   │   │   └── jobs.py           # Job management endpoints
 │   │   └── services/
 │   │       ├── transcribe.py     # Whisper transcription
-│   │       ├── detect.py         # Highlight detection
+│   │       ├── detect.py         # Highlight detection (heuristic analysis)
 │   │       ├── extract.py        # Clip extraction
 │   │       ├── render.py         # Vertical rendering
 │   │       ├── sia.py            # Sia upload orchestration
 │   │       ├── sia_client.py     # Sia SDK singleton + demo fallback
-│   │       └── pipeline_orchestrator.py  # 5-stage pipeline coordination
+│   │       ├── sia_upload.py     # Sia upload helpers
+│   │       ├── pipeline_orchestrator.py  # 5-stage pipeline coordination
+│   │       ├── pipeline_events.py        # Pipeline event emission
+│   │       └── pipeline_steps.py         # Pipeline step tracking
 │   └── migrations/
 │       └── add_source_url.sql
 ├── frontend/
@@ -242,9 +236,12 @@ rebit/
 │   ├── tsconfig.json
 │   ├── package.json
 │   ├── postcss.config.mjs
+│   ├── eslint.config.mjs
+│   ├── prisma.config.ts
+│   ├── proxy.ts                  # Route protection middleware
 │   ├── app/
 │   │   ├── globals.css           # Global styles
-│   │   ├── layout.tsx            # Root layout with NavBar
+│   │   ├── layout.tsx            # Root layout with Sidebar + TopNav
 │   │   ├── page.tsx              # Landing page (redirects to /projects)
 │   │   ├── login/
 │   │   │   └── page.tsx          # Login page (passkey authentication)
@@ -260,6 +257,8 @@ rebit/
 │   │   │   └── page.tsx          # Video upload page
 │   │   ├── settings/
 │   │   │   └── page.tsx          # User settings
+│   │   ├── unauthorized/
+│   │   │   └── page.tsx          # Unauthorized access page
 │   │   └── api/
 │   │       ├── inngest/
 │   │       │   └── route.ts      # Inngest handler
@@ -270,34 +269,53 @@ rebit/
 │   │       │   ├── providers/
 │   │       │   └── complete/
 │   │       ├── sia/
-│   │       │   ├── status/
-│   │       │   └── events/
+│   │       │   └── status/
 │   │       ├── config/
 │   │       │   └── backend-url/
 │   │       ├── auth/
 │   │       │   ├── [...nextauth]/
 │   │       │   └── passkey/
+│   │       │       ├── status/
+│   │       │       ├── register/
+│   │       │       │   ├── begin/
+│   │       │       │   └── complete/
+│   │       │       ├── register-first/
+│   │       │       │   ├── begin/
+│   │       │       │   └── complete/
+│   │       │       ├── auth/
+│   │       │       │   ├── begin/
+│   │       │       │   └── complete/
+│   │       │       └── delete/
 │   │       ├── jobs/
 │   │       │   ├── route.ts
-│   │       │   └── [id]/
+│   │       │   └── [jobId]/
 │   │       │       ├── route.ts
+│   │       │       ├── start-pipeline/
 │   │       │       └── segments/
-│   │       │           └── route.ts
+│   │       ├── upload/
+│   │       │   └── route.ts
+│   │       ├── url-import/
+│   │       │   ├── route.ts
+│   │       │   └── info/
 │   │       └── health/
 │   ├── components/
-│   │   ├── NavBar.tsx
+│   │   ├── TopNav.tsx
 │   │   ├── Sidebar.tsx
 │   │   ├── SidebarContext.tsx
-│   │   ├── TopNav.tsx
 │   │   ├── MainContent.tsx
 │   │   ├── ProjectCard.tsx
 │   │   ├── ClipCard.tsx
 │   │   ├── PipelineTracker.tsx
-│   │   └── SiaStatus.tsx
+│   │   ├── SiaStatus.tsx
+│   │   └── SessionProvider.tsx
 │   ├── lib/
 │   │   ├── config.ts
 │   │   ├── types/
 │   │   │   └── index.ts
+│   │   ├── hooks/
+│   │   │   └── usePipelineSSE.ts
+│   │   ├── mock/
+│   │   │   └── data.ts
 │   │   ├── inngest/
 │   │   │   ├── client.ts
 │   │   │   └── pipeline.ts
@@ -314,6 +332,8 @@ rebit/
 │   │       ├── client.ts
 │   │       ├── schema.prisma
 │   │       └── migrations/
+│   ├── types/
+│   │   └── next-auth.d.ts
 │   └── public/
 │       ├── file.svg
 │       ├── globe.svg
@@ -341,6 +361,15 @@ All processing happens locally on the backend container. No external video proce
 Each pipeline function receives `(jobId, db)` and returns `(passed: bool, message: str)`. Stages are called by the Inngest function via HTTP POST to the backend's `/api/{stage}` endpoints. Logs are written to `PipelineStep` in the database.
 
 The pipeline runs 5 stages sequentially. If any stage fails, the job is marked `failed` and the function stops. If all 5 pass (including Sia storage), the job moves to `complete` status.
+
+### Highlight Detection
+
+Stage 2 analyzes the transcript using a multi-strategy heuristic engine that evaluates:
+- **Hook strength**: How engaging the opening of each segment is, scored by keyword analysis
+- **Virality score**: Likelihood of being shared, based on position, duration, emotional signals, and sentence structure
+- **Emotional signals**: Sentiment detection across 8 categories (excitement, surprise, urgency, curiosity, authority, positivity, negativity, contrast)
+
+The heuristic engine runs locally and requires no external API keys. Nearby segments are merged for natural boundaries, and the top segments by score are selected as clips.
 
 ### Sia Integration
 
@@ -380,7 +409,6 @@ After the initial launch milestone, the focus will shift to broadening the types
 
 | Category | Description |
 |----------|-------------|
-| AI Enhancement | LLM-powered highlight detection with OpenRouter integration for more accurate virality scoring |
 | Multi-language | Support for transcription and processing in multiple languages |
 | Batch Processing | Queue multiple videos for sequential processing |
 | Custom Templates | User-defined rendering templates and styles |
