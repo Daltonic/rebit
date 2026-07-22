@@ -68,6 +68,10 @@ export default function ProjectsPage() {
     return matchSearch && matchFilter;
   });
 
+  const handleDeleted = (jobId: string) => {
+    setJobs(prev => prev.filter(j => j.id !== jobId));
+  };
+
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
       {/* Header */}
@@ -164,7 +168,7 @@ export default function ProjectsPage() {
               updatedAt: job.updatedAt,
               pipelineSteps: job.pipelineSteps,
               _count: { segments: job.segmentCount },
-            }} />
+            }} onDeleted={handleDeleted} />
           ))}
         </div>
       )}

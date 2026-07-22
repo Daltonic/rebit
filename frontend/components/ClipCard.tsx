@@ -120,7 +120,7 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
     videoRef.current?.requestFullscreen?.();
   };
 
-  const seek = (e: React.MouseEvent<HTMLDivElement>) => {
+  const seek = (e: Pick<React.MouseEvent<HTMLDivElement>, 'clientX' | 'currentTarget' | 'stopPropagation'>) => {
     e.stopPropagation();
     if (error) return;
     const v = videoRef.current;
@@ -192,7 +192,7 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
           style={{ height: 14, display: 'flex', alignItems: 'center', position: 'relative' }}
           onClick={seek}
           onMouseMove={e => { if (e.buttons === 1) seek(e); }}
-          onTouchStart={e => { const t = e.touches[0]; if (t) seek({ clientX: t.clientX, currentTarget: e.currentTarget, stopPropagation: () => e.stopPropagation() } as any); }}
+          onTouchStart={e => { const t = e.touches[0]; if (t) seek({ clientX: t.clientX, currentTarget: e.currentTarget, stopPropagation: () => e.stopPropagation() }); }}
         >
           <div style={{ width: '100%', height: 3, background: 'rgba(255,255,255,0.2)', borderRadius: 2, position: 'relative' }}>
             <div style={{

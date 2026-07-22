@@ -1,5 +1,5 @@
 # ReBit — Docker Compose
-# Orchestrates the full stack: frontend, backend, database, Inngest, Ollama
+# Orchestrates the full stack: frontend, backend, database, Inngest
 
 services:
   # ── PostgreSQL Database ──────────────────────────────────────────────
@@ -35,33 +35,6 @@ services:
       inngest dev --no-discovery
       --sdk-url http://frontend:3000/api/inngest
       --sdk-url http://backend:8000/api/inngest
-
-  # ── Ollama (Embedding Model) ────────────────────────────────────────
-  ollama:
-    image: ollama/ollama:latest
-    container_name: rebit-ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  ollama-setup:
-    image: ollama/ollama:latest
-    container_name: rebit-ollama-setup
-    restart: "no"
-    depends_on:
-      ollama:
-        condition: service_healthy
-    volumes:
-      - ollama_data:/root/.ollama
-    entrypoint: >
-      sh -c "sleep 5 && ollama pull nomic-embed-text"
 
   # ── Backend (Python FastAPI) ───────────────────────────────────────
   backend:
@@ -122,8 +95,6 @@ volumes:
   task_uploads:
     driver: local
   task_output:
-    driver: local
-  ollama_data:
     driver: local
   sia_data:
     driver: local
