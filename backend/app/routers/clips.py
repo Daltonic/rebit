@@ -238,7 +238,8 @@ async def serve_clip(
         if sdk is not None:
             try:
                 cache_path = await _fetch_and_cache_from_sia(
-                    segment_id, segment.sia_object_id,
+                    segment_id,
+                    segment.sia_object_id,
                 )
                 return await _range_file_response(cache_path, request)
             except Exception as e:
@@ -255,9 +256,13 @@ async def serve_clip(
     # ──────────────────────────────────────────────────────────────────
     if segment.clip_path:
         clip_path = Path(segment.clip_path)
-        if clip_path.exists():
+        if clip_path.exists() and clip_path.stat().st_size > 0:
             logger.info(f"Serving clip {segment_id} from local filesystem: {clip_path}")
             return await _range_file_response(clip_path, request)
+        elif clip_path.exists():
+            logger.warning(
+                f"clip_path exists in DB but file is empty (likely a failed ffmpeg run): {clip_path}"
+            )
         else:
             logger.warning(f"clip_path exists in DB but file not found: {clip_path}")
 

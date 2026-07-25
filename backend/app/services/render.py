@@ -5,6 +5,7 @@ Takes extracted clips and renders them as vertical (9:16) short-form videos
 with optional captions/subtitles overlay.
 """
 
+import logging
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,8 @@ from app.config import settings
 from app.models import Job, Segment, PipelineStep
 from app.services.pipeline_steps import upsert_pipeline_step
 
+logger = logging.getLogger(__name__)
+
 
 async def render_clips(
     job_id: str,
@@ -23,7 +26,7 @@ async def render_clips(
 ) -> dict:
     """
     Render extracted clips as vertical short-form videos.
-    
+
     1. Fetches segments with clip_path set
     2. Converts each to 9:16 vertical format
     3. Adds optional caption overlay
@@ -46,7 +49,9 @@ async def render_clips(
     if not segments:
         return {"passed": False, "message": "No clips to render"}
 
-    await upsert_pipeline_step(db, job_id, "render", "running", 10, f"Rendering {len(segments)} clips...")
+    await upsert_pipeline_step(
+        db, job_id, "render", "running", 10, f"Rendering {len(segments)} clips..."
+    )
 
     rendered_dir = settings.output_path / job_id / "rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
@@ -57,8 +62,12 @@ async def render_clips(
         for i, segment in enumerate(segments):
             progress = 10 + int((i / len(segments)) * 80)
             await upsert_pipeline_step(
-                db, job_id, "render", "running", progress,
-                f"Rendering clip {i + 1}/{len(segments)}..."
+                db,
+                job_id,
+                "render",
+                "running",
+                progress,
+                f"Rendering clip {i + 1}/{len(segments)}...",
             )
 
             source_path = Path(segment.clip_path)
@@ -70,13 +79,20 @@ async def render_clips(
 
             # Get source video dimensions
             probe_cmd = [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height",
-                "-of", "csv=p=0",
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0",
                 str(source_path),
             ]
-            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+            probe_result = subprocess.run(
+                probe_cmd, capture_output=True, text=True, timeout=30
+            )
             dimensions = probe_result.stdout.strip().split(",")
 
             if len(dimensions) == 2:
@@ -91,56 +107,78 @@ async def render_clips(
                 # Already vertical — just copy
                 ffmpeg_cmd = [
                     "ffmpeg",
-                    "-i", str(source_path),
-                    "-c:v", "libx264",
-                    "-c:a", "aac",
-                    "-preset", "fast",
-                    "-crf", "22",
+                    "-i",
+                    str(source_path),
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                    "-preset",
+                    "fast",
+                    "-crf",
+                    "22",
                     "-y",
                     str(output_path),
                 ]
             else:
-                # Convert to vertical (9:16) — crop center
-                target_height = int(width * 16 / 9)
-                if target_height > height:
-                    # Letterbox instead of crop
-                    target_width = int(height * 9 / 16)
-                    ffmpeg_cmd = [
-                        "ffmpeg",
-                        "-i", str(source_path),
-                        "-vf", f"scale={target_width}:{height},pad={target_width}:{int(target_width*16/9)}:(ow-iw)/2:(oh-ih)/2",
-                        "-c:v", "libx264",
-                        "-c:a", "aac",
-                        "-preset", "fast",
-                        "-crf", "22",
-                        "-y",
-                        str(output_path),
-                    ]
-                else:
-                    # Crop to vertical
-                    crop_height = int(width * 16 / 9)
-                    crop_y = int((height - crop_height) / 2)
-                    ffmpeg_cmd = [
-                        "ffmpeg",
-                        "-i", str(source_path),
-                        "-vf", f"crop={width}:{crop_height}:0:{crop_y},scale=1080:1920",
-                        "-c:v", "libx264",
-                        "-c:a", "aac",
-                        "-preset", "fast",
-                        "-crf", "22",
-                        "-y",
-                        str(output_path),
-                    ]
+                # Convert landscape/square source to a 1080x1920 vertical
+                # canvas: scale to fit inside the canvas without cropping,
+                # then letterbox (pad) to fill the rest.
+                #
+                # NOTE: this used to compute the pad height by re-deriving
+                # it from a truncated (int()) scaled width, which rounds
+                # down just enough that the pad target ends up smaller
+                # than the actual scaled frame — ffmpeg then refuses to
+                # pad ("Padded dimensions cannot be smaller than input
+                # dimensions") and exits non-zero, leaving an empty output
+                # file that the old code didn't check for. Scaling and
+                # padding to the same fixed, even target dimensions avoids
+                # the mismatch entirely.
+                ffmpeg_cmd = [
+                    "ffmpeg",
+                    "-i",
+                    str(source_path),
+                    "-vf",
+                    "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                    "-preset",
+                    "fast",
+                    "-crf",
+                    "22",
+                    "-y",
+                    str(output_path),
+                ]
 
-            subprocess.run(ffmpeg_cmd, capture_output=True, timeout=180)
+            ffmpeg_result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=180)
 
-            if output_path.exists():
+            if ffmpeg_result.returncode != 0:
+                stderr_tail = ffmpeg_result.stderr.decode(errors="replace")[-500:]
+                logger.warning(
+                    f"ffmpeg render failed for segment {segment.id} (job {job_id}): {stderr_tail}"
+                )
+                # Leave segment.clip_path pointing at the still-valid
+                # extracted (unrendered) clip rather than overwriting it
+                # with a broken/empty file, so playback still works.
+                continue
+
+            if output_path.exists() and output_path.stat().st_size > 0:
                 segment.clip_path = str(output_path)
                 clips_rendered += 1
+            else:
+                logger.warning(
+                    f"ffmpeg reported success but produced no/empty output for segment {segment.id} (job {job_id})"
+                )
 
         await upsert_pipeline_step(
-            db, job_id, "render", "complete", 100,
-            f"Rendered {clips_rendered}/{len(segments)} clips"
+            db,
+            job_id,
+            "render",
+            "complete",
+            100,
+            f"Rendered {clips_rendered}/{len(segments)} clips",
         )
 
         return {
@@ -150,8 +188,12 @@ async def render_clips(
         }
 
     except subprocess.TimeoutExpired:
-        await upsert_pipeline_step(db, job_id, "render", "failed", 0, "Rendering timed out")
+        await upsert_pipeline_step(
+            db, job_id, "render", "failed", 0, "Rendering timed out"
+        )
         return {"passed": False, "message": "Rendering timed out"}
     except Exception as e:
-        await upsert_pipeline_step(db, job_id, "render", "failed", 0, f"Rendering failed: {str(e)}")
+        await upsert_pipeline_step(
+            db, job_id, "render", "failed", 0, f"Rendering failed: {str(e)}"
+        )
         return {"passed": False, "message": f"Rendering failed: {str(e)}"}
