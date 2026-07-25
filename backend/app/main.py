@@ -16,7 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.config import settings
 from app.database import init_db, close_db, async_session_factory
 from app.models import AppSettings
-from app.routers import pipeline, sia, upload, url_import, jobs
+from app.routers import pipeline, sia, upload, url_import, jobs, clips
 from app.services import sia_client
 
 # ── Logging ──────────────────────────────────────────────────────────────
@@ -94,6 +94,7 @@ app.include_router(sia.router)
 app.include_router(upload.router)
 app.include_router(url_import.router)
 app.include_router(jobs.router)
+app.include_router(clips.router)
 
 
 # ── Health Check ─────────────────────────────────────────────────────────
