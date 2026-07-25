@@ -241,9 +241,12 @@ async def serve_clip(
                     segment_id, segment.sia_object_id,
                 )
                 return await _range_file_response(cache_path, request)
-            except HTTPException:
-                raise
             except Exception as e:
+                # Any failure here — including the HTTPException that
+                # _fetch_and_cache_from_sia raises for "object not found" —
+                # should fall through to the local filesystem fallback below
+                # rather than aborting the request. A stale/wrong Sia object
+                # ID shouldn't block playback when the file is still on disk.
                 logger.error(f"Failed to serve clip {segment_id} from Sia: {e}")
                 # Fall through to local filesystem fallback
 
