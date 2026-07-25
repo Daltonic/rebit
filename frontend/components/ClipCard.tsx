@@ -133,7 +133,7 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
   if (error) {
     return (
       <div className="relative w-full flex flex-col items-center justify-center gap-2"
-        style={{ height: 180, background: '#0a0a0a' }}>
+        style={{ aspectRatio: '9 / 16', background: '#0a0a0a' }}>
         <AlertCircle size={24} style={{ color: 'var(--text-muted)' }} />
         <p style={{ color: 'var(--text-muted)', fontSize: 11, textAlign: 'center', maxWidth: 200 }}>{error}</p>
       </div>
@@ -143,7 +143,7 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
   return (
     <div
       className="relative w-full select-none"
-      style={{ height: 180, background: '#0a0a0a', cursor: 'pointer' }}
+      style={{ aspectRatio: '9 / 16', background: '#0a0a0a', cursor: 'pointer' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={toggle}
@@ -247,7 +247,7 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
 function VideoPlaceholder() {
   return (
     <div className="relative w-full flex items-center justify-center"
-      style={{ height: 180, background: 'var(--bg-elevated)' }}>
+      style={{ aspectRatio: '9 / 16', background: 'var(--bg-elevated)' }}>
       <div style={{
         width: 44, height: 44, borderRadius: '50%',
         background: 'rgba(124,58,237,0.15)',
