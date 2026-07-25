@@ -9,6 +9,7 @@ import logging
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,196 @@ from app.models import Job, Segment, PipelineStep
 from app.services.pipeline_steps import upsert_pipeline_step
 
 logger = logging.getLogger(__name__)
+
+# ── Subject detection (for keeping the primary subject centered in the
+# vertical crop) ─────────────────────────────────────────────────────────
+# Three-tier approach, each tier only used if the one above it comes up
+# empty:
+#   1. Face detection — OpenCV's bundled Haar cascade. No model download
+#      needed; ships in the base opencv-python package.
+#   2. Generic saliency detection — OpenCV's saliency module, for content
+#      whose "primary object" isn't a person: products, animals, a phone
+#      screen, whatever the visually dominant thing in frame is. This
+#      lives in opencv-contrib-python (or opencv-contrib-python-headless
+#      on a server), NOT the base opencv-python package, so it's treated
+#      as independently optional from face detection.
+#   3. Plain center crop — the final fallback if neither of the above is
+#      available or finds anything.
+try:
+    import cv2
+    import numpy as np
+
+    _CV2_AVAILABLE = True
+except Exception as e:
+    cv2 = None
+    np = None
+    _CV2_AVAILABLE = False
+    logger.warning(
+        f"OpenCV unavailable — vertical clips will use a center crop instead of subject tracking: {e}"
+    )
+
+_FACE_CASCADE = None
+_SALIENCY = None
+
+if _CV2_AVAILABLE:
+    try:
+        _FACE_CASCADE = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+        if _FACE_CASCADE.empty():
+            _FACE_CASCADE = None
+    except Exception as e:
+        logger.warning(f"Face cascade unavailable: {e}")
+
+    try:
+        _SALIENCY = cv2.saliency.StaticSaliencySpectralResidual_create()
+    except Exception as e:
+        logger.warning(
+            "OpenCV saliency module unavailable (needs opencv-contrib-python or "
+            f"opencv-contrib-python-headless) — non-face subjects won't be tracked, "
+            f"only faces and a center-crop fallback: {e}"
+        )
+
+# How many frames to sample across a clip when looking for the subject.
+FACE_SAMPLE_COUNT = 8
+
+
+def _detect_face_center_x(video_path: Path, height: int) -> Optional[float]:
+    """
+    Sample a handful of frames from the clip and run face detection to
+    find where the primary speaker sits horizontally, so the vertical
+    crop can stay centered on them instead of blindly cutting the middle
+    of the original landscape frame (which crops people out when they
+    aren't centered in the source shot).
+
+    Returns the detected face center as an x-coordinate in source pixel
+    space — the largest face per sampled frame is treated as "the
+    speaker" and results are weighted by face area across samples so one
+    small, incidental face in the background doesn't skew the crop.
+    Returns None if OpenCV/the cascade isn't available or no face was
+    found in any sampled frame; the caller should try the saliency
+    fallback next.
+    """
+    if _FACE_CASCADE is None:
+        return None
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return None
+
+    try:
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+            return None
+
+        sample_indices = [
+            int(total_frames * (i + 1) / (FACE_SAMPLE_COUNT + 1))
+            for i in range(FACE_SAMPLE_COUNT)
+        ]
+
+        weighted_sum = 0.0
+        weight_total = 0.0
+
+        for idx in sample_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                continue
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = _FACE_CASCADE.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(int(height * 0.08), int(height * 0.08)),
+            )
+            if len(faces) == 0:
+                continue
+
+            # Largest face in this frame = the primary speaker
+            fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+            center_x = fx + fw / 2
+            area = fw * fh
+
+            weighted_sum += center_x * area
+            weight_total += area
+
+        if weight_total == 0:
+            return None
+
+        return weighted_sum / weight_total
+
+    finally:
+        cap.release()
+
+
+def _detect_salient_center_x(video_path: Path, height: int) -> Optional[float]:
+    """
+    Second-tier fallback for content with no detectable face: finds the
+    visually most prominent region of the frame (whatever it is — a
+    product, a screen, an animal, anything) using OpenCV's generic
+    saliency detection, and returns its horizontal center.
+
+    Unlike face detection this doesn't know or care *what* the subject
+    is, only that it stands out from the rest of the frame. Returns None
+    if the saliency module isn't available or nothing salient was found
+    in any sampled frame; the caller should fall back to a plain center
+    crop at that point.
+    """
+    if _SALIENCY is None:
+        return None
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return None
+
+    try:
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+            return None
+
+        sample_indices = [
+            int(total_frames * (i + 1) / (FACE_SAMPLE_COUNT + 1))
+            for i in range(FACE_SAMPLE_COUNT)
+        ]
+
+        weighted_sum = 0.0
+        weight_total = 0.0
+
+        for idx in sample_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                continue
+
+            success, saliency_map = _SALIENCY.computeSaliency(frame)
+            if not success:
+                continue
+
+            saliency_map = (saliency_map * 255).astype("uint8")
+            # Otsu threshold isolates the most salient region from the
+            # rest of the frame rather than averaging over everything,
+            # which would just pull the result back toward center.
+            _, thresh = cv2.threshold(
+                saliency_map, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+            ys, xs = np.nonzero(thresh)
+            if len(xs) == 0:
+                continue
+
+            frame_weight = float(len(xs))
+            frame_center_x = float(xs.mean())
+
+            weighted_sum += frame_center_x * frame_weight
+            weight_total += frame_weight
+
+        if weight_total == 0:
+            return None
+
+        return weighted_sum / weight_total
+
+    finally:
+        cap.release()
 
 
 async def render_clips(
@@ -121,36 +312,75 @@ async def render_clips(
                     str(output_path),
                 ]
             else:
-                # Convert landscape/square source to a 1080x1920 vertical
-                # canvas: scale to fit inside the canvas without cropping,
-                # then letterbox (pad) to fill the rest.
-                #
-                # NOTE: this used to compute the pad height by re-deriving
-                # it from a truncated (int()) scaled width, which rounds
-                # down just enough that the pad target ends up smaller
-                # than the actual scaled frame — ffmpeg then refuses to
-                # pad ("Padded dimensions cannot be smaller than input
-                # dimensions") and exits non-zero, leaving an empty output
-                # file that the old code didn't check for. Scaling and
-                # padding to the same fixed, even target dimensions avoids
-                # the mismatch entirely.
-                ffmpeg_cmd = [
-                    "ffmpeg",
-                    "-i",
-                    str(source_path),
-                    "-vf",
-                    "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
-                    "-c:v",
-                    "libx264",
-                    "-c:a",
-                    "aac",
-                    "-preset",
-                    "fast",
-                    "-crf",
-                    "22",
-                    "-y",
-                    str(output_path),
-                ]
+                # Crop the source down to a 9:16 slice centered on the
+                # detected speaker's face, then scale to the standard
+                # 1080x1920 output. This keeps the person correctly
+                # framed, instead of shrinking the whole landscape frame
+                # into a letterboxed vertical canvas — which is
+                # technically "vertical" but doesn't follow the subject,
+                # which is the actual point of this feature.
+                crop_width_px = int(height * 9 / 16)
+                crop_width_px -= crop_width_px % 2  # even width for libx264/yuv420p
+
+                if crop_width_px >= width:
+                    # Source is wider than 16:9 (e.g. ultra-wide) — a
+                    # meaningful horizontal crop isn't possible without
+                    # cutting into the subject either way, so fall back
+                    # to letterboxing the full frame instead.
+                    ffmpeg_cmd = [
+                        "ffmpeg",
+                        "-i",
+                        str(source_path),
+                        "-vf",
+                        "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
+                        "-c:v",
+                        "libx264",
+                        "-c:a",
+                        "aac",
+                        "-preset",
+                        "fast",
+                        "-crf",
+                        "22",
+                        "-y",
+                        str(output_path),
+                    ]
+                else:
+                    focus_center_x = _detect_face_center_x(source_path, height)
+                    focus_method = "face"
+
+                    if focus_center_x is None:
+                        focus_center_x = _detect_salient_center_x(source_path, height)
+                        focus_method = "saliency"
+
+                    if focus_center_x is None:
+                        focus_center_x = width / 2  # final fallback: plain center crop
+                        focus_method = "center"
+
+                    logger.info(
+                        f"Using {focus_method} crop focus for segment {segment.id} (job {job_id})"
+                    )
+
+                    crop_x = int(focus_center_x - crop_width_px / 2)
+                    crop_x = max(0, min(crop_x, width - crop_width_px))
+                    crop_x -= crop_x % 2
+
+                    ffmpeg_cmd = [
+                        "ffmpeg",
+                        "-i",
+                        str(source_path),
+                        "-vf",
+                        f"crop={crop_width_px}:{height}:{crop_x}:0,scale=1080:1920",
+                        "-c:v",
+                        "libx264",
+                        "-c:a",
+                        "aac",
+                        "-preset",
+                        "fast",
+                        "-crf",
+                        "22",
+                        "-y",
+                        str(output_path),
+                    ]
 
             ffmpeg_result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=180)
 
