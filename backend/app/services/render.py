@@ -5,8 +5,8 @@ Takes extracted clips and renders them as vertical (9:16) short-form videos
 with optional captions/subtitles overlay.
 """
 
+import asyncio
 import logging
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Job, Segment, PipelineStep
 from app.services.pipeline_steps import upsert_pipeline_step
+from app.services.async_subprocess import run_subprocess, SubprocessTimeoutExpired
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,10 @@ def _detect_face_center_x(video_path: Path, height: int) -> Optional[float]:
     Returns None if OpenCV/the cascade isn't available or no face was
     found in any sampled frame; the caller should try the saliency
     fallback next.
+
+    This is synchronous, CPU-bound OpenCV work — the caller runs it via
+    `asyncio.to_thread()` rather than awaiting it directly, so decoding
+    and scanning frames doesn't block the event loop.
     """
     if _FACE_CASCADE is None:
         return None
@@ -154,6 +159,9 @@ def _detect_salient_center_x(video_path: Path, height: int) -> Optional[float]:
     if the saliency module isn't available or nothing salient was found
     in any sampled frame; the caller should fall back to a plain center
     crop at that point.
+
+    Same as _detect_face_center_x: synchronous OpenCV work, meant to be
+    run via `asyncio.to_thread()`, not awaited directly.
     """
     if _SALIENCY is None:
         return None
@@ -221,6 +229,13 @@ async def render_clips(
     1. Fetches segments with clip_path set
     2. Converts each to 9:16 vertical format
     3. Adds optional caption overlay
+
+    All ffprobe/ffmpeg calls run through async_subprocess.run_subprocess()
+    instead of subprocess.run(), and the OpenCV subject-detection calls
+    run through asyncio.to_thread() instead of being called directly —
+    both were blocking the event loop for as long as this stage ran,
+    which is what froze the job page's polling and SSE updates during
+    rendering.
     """
     # Fetch job
     result = await db.execute(select(Job).where(Job.id == job_id))
@@ -281,10 +296,8 @@ async def render_clips(
                 "csv=p=0",
                 str(source_path),
             ]
-            probe_result = subprocess.run(
-                probe_cmd, capture_output=True, text=True, timeout=30
-            )
-            dimensions = probe_result.stdout.strip().split(",")
+            probe_result = await run_subprocess(probe_cmd, timeout=30)
+            dimensions = probe_result.stdout.decode(errors="replace").strip().split(",")
 
             if len(dimensions) == 2:
                 width, height = int(dimensions[0]), int(dimensions[1])
@@ -345,11 +358,15 @@ async def render_clips(
                         str(output_path),
                     ]
                 else:
-                    focus_center_x = _detect_face_center_x(source_path, height)
+                    focus_center_x = await asyncio.to_thread(
+                        _detect_face_center_x, source_path, height
+                    )
                     focus_method = "face"
 
                     if focus_center_x is None:
-                        focus_center_x = _detect_salient_center_x(source_path, height)
+                        focus_center_x = await asyncio.to_thread(
+                            _detect_salient_center_x, source_path, height
+                        )
                         focus_method = "saliency"
 
                     if focus_center_x is None:
@@ -382,7 +399,7 @@ async def render_clips(
                         str(output_path),
                     ]
 
-            ffmpeg_result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=180)
+            ffmpeg_result = await run_subprocess(ffmpeg_cmd, timeout=180)
 
             if ffmpeg_result.returncode != 0:
                 stderr_tail = ffmpeg_result.stderr.decode(errors="replace")[-500:]
@@ -417,7 +434,7 @@ async def render_clips(
             "clips_rendered": clips_rendered,
         }
 
-    except subprocess.TimeoutExpired:
+    except SubprocessTimeoutExpired:
         await upsert_pipeline_step(
             db, job_id, "render", "failed", 0, "Rendering timed out"
         )

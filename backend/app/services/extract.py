@@ -6,7 +6,6 @@ Creates vertical (9:16) short-form clips from the original video.
 """
 
 import logging
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Job, Segment, PipelineStep
 from app.services.pipeline_steps import upsert_pipeline_step
+from app.services.async_subprocess import run_subprocess, SubprocessTimeoutExpired
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,12 @@ async def extract_clips(
     1. Fetches segments for the job
     2. Uses ffmpeg to cut clips from the source video
     3. Saves clip paths to segment records
+
+    ffmpeg runs via async_subprocess.run_subprocess() rather than
+    subprocess.run() — this stage can take minutes for a long source
+    video with many segments, and a blocking call here would freeze
+    the whole server (SSE stream, job polling, everything) for that
+    entire duration.
     """
     # Fetch job
     result = await db.execute(select(Job).where(Job.id == job_id))
@@ -110,7 +116,7 @@ async def extract_clips(
                 str(clip_path),
             ]
 
-            ffmpeg_result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=120)
+            ffmpeg_result = await run_subprocess(ffmpeg_cmd, timeout=120)
 
             if ffmpeg_result.returncode != 0:
                 stderr_tail = ffmpeg_result.stderr.decode(errors="replace")[-500:]
@@ -142,7 +148,7 @@ async def extract_clips(
             "clips_rendered": clips_rendered,
         }
 
-    except subprocess.TimeoutExpired:
+    except SubprocessTimeoutExpired:
         await upsert_pipeline_step(
             db, job_id, "extract", "failed", 0, "Clip extraction timed out"
         )
