@@ -6,8 +6,6 @@ import { useSession } from 'next-auth/react';
 import ProjectCard from '@/components/ProjectCard';
 import { JobStatus, PipelineStep, SiaUploadStatus } from '@/lib/types';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
-
 const FILTERS: { label: string; value: JobStatus | 'all' }[] = [
   { label: 'All', value: 'all' },
   { label: 'Processing', value: 'transcribing' },
@@ -43,7 +41,7 @@ export default function ProjectsPage() {
         setLoading(true);
         const userId = session?.user?.id;
         const params = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
-        const res = await fetch(`${BACKEND_URL}/api/jobs${params}`);
+        const res = await fetch(`/api/jobs${params}`);
         if (!res.ok) throw new Error(`Failed to fetch jobs: ${res.status}`);
         const data: JobListItem[] = await res.json();
         setJobs(data);

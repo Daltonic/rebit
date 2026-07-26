@@ -3,8 +3,6 @@ import { useState } from 'react';
 import { PipelineStep, StageStatus } from '@/lib/types';
 import { Check, X, Loader2, Clock, Mic, Brain, Scissors, Film, Database, Upload, RefreshCw } from 'lucide-react';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
-
 const STAGES: { key: PipelineStep['stage']; label: string; icon: React.ElementType }[] = [
   { key: 'sia_upload', label: 'Sia Upload', icon: Upload },
   { key: 'transcribe', label: 'Transcribe', icon: Mic },
@@ -54,7 +52,7 @@ export default function PipelineTracker({ steps, jobId, onRetry }: { steps: Pipe
     if (!jobId || retryingStage || cooldownStage === stage) return;
     setRetryingStage(stage);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/jobs/${jobId}/start-pipeline?start_from=${stage}`);
+      const res = await fetch(`/api/jobs/${jobId}/start-pipeline?start_from=${stage}`);
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error('Failed to retry');
       if (data?.status === 'already_running') {

@@ -4,8 +4,6 @@ import Link from 'next/link';
 import { Job, JobStatus } from '@/lib/types';
 import { ArrowRight, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, Video, Trash2 } from 'lucide-react';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
-
 function statusConfig(s: JobStatus) {
   const configs = {
     uploading: { label: 'Uploading', color: 'var(--info)', bg: 'rgba(59,130,246,0.1)', icon: Loader2, spin: true },
@@ -88,7 +86,7 @@ export default function ProjectCard({ job, onDeleted }: ProjectCardProps) {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/jobs/${job.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/jobs/${job.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
       onDeleted?.(job.id);
     } catch {
