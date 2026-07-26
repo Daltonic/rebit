@@ -3,21 +3,16 @@ import type { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma/client';
 
-// ── Setup Status Cache ──────────────────────────────────────────────────
-// The setup status only changes during the initial setup flow, so we cache
-// it aggressively to avoid hammering the API on every single request.
-let cachedSetupComplete: boolean | null = null;
-let cacheTimestamp = 0;
-const CACHE_TTL_MS = 10_000; // 10 seconds
+// ── Setup Status Check ──────────────────────────────────────────────────
+// We always fetch the setup status fresh rather than caching it, because
+// the middleware and API route handlers run in separate module instances
+// in Next.js. A module-level cache in the middleware would not be
+// invalidated when route handlers call invalidateSetupCache(), causing
+// stale reads that redirect users back to /setup even after completing
+// the wizard. The /api/setup/status endpoint is a fast DB query, so
+// there is no meaningful performance penalty.
 
 async function checkSetupComplete(baseUrl: string): Promise<boolean> {
-  const now = Date.now();
-
-  // Return cached value if still fresh
-  if (cachedSetupComplete !== null && now - cacheTimestamp < CACHE_TTL_MS) {
-    return cachedSetupComplete;
-  }
-
   try {
     const res = await fetch(`${baseUrl}/api/setup/status`, {
       signal: AbortSignal.timeout(5000),
@@ -25,22 +20,19 @@ async function checkSetupComplete(baseUrl: string): Promise<boolean> {
 
     if (res.ok) {
       const data = await res.json();
-      cachedSetupComplete = !!data.setupComplete;
-    } else {
-      cachedSetupComplete = false;
+      return !!data.setupComplete;
     }
   } catch {
-    cachedSetupComplete = false;
+    // Fall through to false
   }
 
-  cacheTimestamp = now;
-  return cachedSetupComplete;
+  return false;
 }
 
-// Invalidate the cache (called externally when setup status changes)
+// No-op — kept for backward compatibility with route handlers that import it.
+// The middleware no longer caches, so invalidation is unnecessary.
 export function invalidateSetupCache() {
-  cachedSetupComplete = null;
-  cacheTimestamp = 0;
+  // no-op
 }
 
 /**
