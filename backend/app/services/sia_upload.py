@@ -14,14 +14,12 @@ second time.
 """
 
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Job, PipelineStep, SiaLog
+from app.models import Job, SiaLog
 from app.services import sia_client
 from app.services.pipeline_steps import upsert_pipeline_step
 
@@ -94,7 +92,7 @@ async def upload_source_to_sia(
                                    "Uploading to Sia Network...")
 
                 obj = PinnedObject()
-                uploaded = await sdk.upload(obj, file_data)
+                uploaded = await sdk.upload(obj, file_data, None)
                 sia_object_id = uploaded.id()
 
                 await upsert_pipeline_step(db, job_id, "sia_upload", "running", 60,

@@ -69,7 +69,7 @@ async def store_job_artifacts(
         if transcript:
             transcript_data = json.dumps(transcript.json_content).encode("utf-8")
             obj = PinnedObject()
-            uploaded = await sdk.upload(obj, transcript_data)
+            uploaded = await sdk.upload(obj, transcript_data, None)
             transcript.sia_object_id = uploaded.id()
             await _add_sia_log(db, job_id, "upload_transcript", True, f"Transcript uploaded: {uploaded.id()}")
 
@@ -88,7 +88,7 @@ async def store_job_artifacts(
             if clip_path.exists():
                 clip_data = clip_path.read_bytes()
                 obj = PinnedObject()
-                uploaded = await sdk.upload(obj, clip_data)
+                uploaded = await sdk.upload(obj, clip_data, None)
                 segment.sia_object_id = uploaded.id()
                 await _add_sia_log(db, job_id, "upload_clip", True, f"Clip uploaded: {uploaded.id()}")
 
@@ -101,7 +101,7 @@ async def store_job_artifacts(
         if video_path.exists():
             video_data = video_path.read_bytes()
             obj = PinnedObject()
-            uploaded = await sdk.upload(obj, video_data)
+            uploaded = await sdk.upload(obj, video_data, None)
             job.source_sia_object_id = uploaded.id()
             await _add_sia_log(db, job_id, "upload_source", True, f"Source uploaded: {uploaded.id()}")
 
