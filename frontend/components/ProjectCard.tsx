@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Job, JobStatus } from '@/lib/types';
-import { ArrowRight, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, Video, Trash2 } from 'lucide-react';
+import { RotateCcw, Clock, CheckCircle2, XCircle, Loader2, Play, Film, Trash2 } from 'lucide-react';
 
 function statusConfig(s: JobStatus) {
   const configs = {
@@ -20,11 +20,58 @@ function statusConfig(s: JobStatus) {
 }
 
 function formatDuration(s: number | null) {
-  if (!s) return '—';
+  if (!s) return null;
   const m = Math.floor(s / 60);
   const h = Math.floor(m / 60);
   if (h > 0) return `${h}h ${m % 60}m`;
-  return `${m}m`;
+  if (m > 0) return `${m}m ${Math.floor(s % 60)}s`;
+  return `${Math.floor(s)}s`;
+}
+
+// Uploaded files are frequently saved under a generated id (screen
+// recordings, mobile exports, the job's own storage key, etc.) rather
+// than anything a person typed — "329e5862b0c6.mp4" tells a viewer
+// nothing. Detect that pattern and show a friendlier title instead,
+// while keeping the real filename available as a tooltip.
+const HASH_LIKE_STEM = /^[a-f0-9]{6,40}$/i;
+
+function isHashLikeFilename(filename: string): boolean {
+  const stem = filename.replace(/\.[^./]+$/, '');
+  return HASH_LIKE_STEM.test(stem);
+}
+
+function formatShortDate(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(iso));
+  } catch {
+    return '';
+  }
+}
+
+function displayTitle(job: Job): string {
+  return isHashLikeFilename(job.sourceFilename)
+    ? `Video from ${formatShortDate(job.createdAt)}`
+    : job.sourceFilename;
+}
+
+// Deterministic gradient per project, so the list reads as a set of
+// distinct thumbnails at a glance instead of identical grey tiles —
+// without needing an actual rendered frame from the backend.
+const THUMBNAIL_GRADIENTS: [string, string][] = [
+  ['#312e81', '#7c3aed'],
+  ['#164e63', '#0ea5e9'],
+  ['#4c0519', '#ec4899'],
+  ['#14532d', '#22c55e'],
+  ['#451a03', '#f59e0b'],
+  ['#1e1b4b', '#6366f1'],
+  ['#3b0764', '#c026d3'],
+];
+
+function gradientForId(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  const [a, b] = THUMBNAIL_GRADIENTS[hash % THUMBNAIL_GRADIENTS.length];
+  return `linear-gradient(135deg, ${a} 0%, ${b} 100%)`;
 }
 
 function TimeAgo({ iso }: { iso: string }) {
@@ -66,6 +113,8 @@ export default function ProjectCard({ job, onDeleted }: ProjectCardProps) {
   const href = job.status === 'complete'
     ? `/projects/${job.id}/clips`
     : `/projects/${job.id}`;
+  const duration = formatDuration(job.durationSeconds);
+  const clipCount = job._count?.segments;
 
   const openConfirm = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.preventDefault();
@@ -98,81 +147,102 @@ export default function ProjectCard({ job, onDeleted }: ProjectCardProps) {
   return (
     <Link
       href={href}
-      className="relative block group rounded-xl p-4 sm:p-5 transition-all duration-200 active:scale-[0.99] sm:hover:scale-[1.01]"
+      className="relative block group rounded-xl overflow-hidden transition-all duration-200 active:scale-[0.99] sm:hover:scale-[1.01]"
       style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}
     >
-      <div className="flex items-start gap-3 sm:gap-4">
-        {/* Icon */}
-        <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center shrink-0"
-          style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
-          <Video size={16} style={{ color: 'var(--text-muted)' }} />
+      {/* Thumbnail — a generated gradient stands in for a real frame since
+          the backend doesn't produce a poster image yet. Deterministic per
+          job id, so the grid reads as distinct projects at a glance. */}
+      <div className="relative w-full" style={{ aspectRatio: '16 / 10', background: gradientForId(job.id) }}>
+        <div className="absolute inset-0" style={{ background: 'radial-gradient(circle at 28% 22%, rgba(255,255,255,0.12), transparent 55%)' }} />
+
+        {/* Play affordance */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div style={{
+            width: 46, height: 46, borderRadius: '50%',
+            background: 'rgba(0,0,0,0.28)',
+            backdropFilter: 'blur(4px)',
+            border: '1.5px solid rgba(255,255,255,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Play size={18} fill="white" style={{ color: 'white', marginLeft: 2 }} />
+          </div>
         </div>
 
-        {/* Main */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2 flex-wrap">
-            <h3 className="text-sm font-medium truncate max-w-full" style={{ color: 'var(--text-primary)' }}>
-              {job.sourceFilename}
-            </h3>
-            <div className="flex items-center gap-1.5 shrink-0 px-2 py-0.5 rounded"
-              style={{ background: cfg.bg, border: `1px solid ${cfg.color}25` }}>
-              <Icon size={10} style={{ color: cfg.color }} className={cfg.spin ? 'animate-spin' : ''} />
-              <span className="text-xs" style={{ color: cfg.color, fontFamily: 'var(--mono)' }}>{cfg.label}</span>
-            </div>
-          </div>
+        {/* Status pill */}
+        <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 rounded"
+          style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)' }}>
+          <Icon size={10} style={{ color: cfg.color }} className={cfg.spin ? 'animate-spin' : ''} />
+          <span className="text-xs" style={{ color: cfg.color, fontFamily: 'var(--mono)' }}>{cfg.label}</span>
+        </div>
 
-          <div className="mt-1.5 flex items-center gap-3 text-xs flex-wrap" style={{ color: 'var(--text-muted)' }}>
-            <span style={{ fontFamily: 'var(--mono)' }}>{formatDuration(job.durationSeconds)}</span>
-            {job._count?.segments !== undefined && (
-              <span>{job._count.segments} clip{job._count.segments !== 1 ? 's' : ''}</span>
+        {/* Delete — kept visible on the thumbnail so removing a project
+            never requires opening it first. */}
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label={`Delete ${job.sourceFilename}`}
+          onClick={openConfirm}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') openConfirm(e); }}
+          className="absolute top-2 left-2 w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer transition-colors"
+          style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)' }}
+        >
+          <Trash2 size={13} style={{ color: 'rgba(255,255,255,0.85)' }} />
+        </div>
+
+        {/* Duration + clip count */}
+        {(duration || clipCount !== undefined) && (
+          <div className="absolute bottom-2 right-2 flex items-center gap-1.5 px-2 py-1 rounded text-xs"
+            style={{ background: 'rgba(0,0,0,0.55)', color: 'white', fontFamily: 'var(--mono)' }}>
+            {duration && <span>{duration}</span>}
+            {duration && clipCount !== undefined && <span style={{ opacity: 0.5 }}>·</span>}
+            {clipCount !== undefined && (
+              <span className="inline-flex items-center gap-1">
+                <Film size={10} />{clipCount}
+              </span>
             )}
-            <span className="flex items-center gap-1">
-              <Clock size={10} />
-              <TimeAgo iso={job.createdAt} />
-            </span>
           </div>
-
-          {/* Active pipeline progress bar */}
-          {isProcessing && (() => {
-            const running = job.pipelineSteps?.find(s => s.status === 'running');
-            const completed = job.pipelineSteps?.filter(s => s.status === 'complete').length ?? 0;
-            const total = job.pipelineSteps?.length ?? 6;
-            const pct = running?.progressPct
-              ? ((completed + running.progressPct / 100) / total) * 100
-              : (completed / total) * 100;
-            return (
-              <div className="mt-3 score-bar">
-                <div className="score-bar-fill" style={{ width: `${pct}%` }} />
-              </div>
-            );
-          })()}
-        </div>
-
-        {/* Right rail: delete + arrow, always visible so deleting never requires opening the project */}
-        <div className="flex flex-col items-center gap-2 shrink-0">
-          <div
-            role="button"
-            tabIndex={0}
-            aria-label={`Delete ${job.sourceFilename}`}
-            onClick={openConfirm}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') openConfirm(e); }}
-            className="w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer transition-colors hover:bg-[rgba(239,68,68,0.12)]"
-            style={{ color: 'var(--text-muted)' }}
-          >
-            <Trash2 size={14} className="group-hover:opacity-100" style={{ opacity: 0.75 }} />
-          </div>
-          <ArrowRight size={14} style={{ color: 'var(--text-muted)' }}
-            className="hidden sm:block transition-transform group-hover:translate-x-1" />
-        </div>
+        )}
       </div>
 
-      {job.status === 'failed' && (
-        <div className="mt-3 flex items-center gap-1.5 text-xs cursor-pointer hover:opacity-80 py-1"
-          style={{ color: 'var(--danger)' }}
-          onClick={e => { e.preventDefault(); e.stopPropagation(); alert('Retry not yet wired to API'); }}>
-          <RotateCcw size={11} /> Retry job
+      {/* Details */}
+      <div className="p-3.5">
+        <h3
+          className="text-sm font-medium truncate"
+          title={job.sourceFilename}
+          style={{ color: 'var(--text-primary)' }}
+        >
+          {displayTitle(job)}
+        </h3>
+
+        <div className="mt-1.5 flex items-center gap-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+          <Clock size={10} />
+          <TimeAgo iso={job.createdAt} />
         </div>
-      )}
+
+        {/* Active pipeline progress bar */}
+        {isProcessing && (() => {
+          const running = job.pipelineSteps?.find(s => s.status === 'running');
+          const completed = job.pipelineSteps?.filter(s => s.status === 'complete').length ?? 0;
+          const total = job.pipelineSteps?.length ?? 6;
+          const pct = running?.progressPct
+            ? ((completed + running.progressPct / 100) / total) * 100
+            : (completed / total) * 100;
+          return (
+            <div className="mt-3 score-bar">
+              <div className="score-bar-fill" style={{ width: `${pct}%` }} />
+            </div>
+          );
+        })()}
+
+        {job.status === 'failed' && (
+          <div className="mt-2.5 flex items-center gap-1.5 text-xs cursor-pointer hover:opacity-80 py-1"
+            style={{ color: 'var(--danger)' }}
+            onClick={e => { e.preventDefault(); e.stopPropagation(); alert('Retry not yet wired to API'); }}>
+            <RotateCcw size={11} /> Retry job
+          </div>
+        )}
+      </div>
 
       {/* Delete confirmation overlay */}
       {confirmOpen && (
@@ -185,7 +255,7 @@ export default function ProjectCard({ job, onDeleted }: ProjectCardProps) {
             Delete this project?
           </p>
           <p className="text-xs max-w-[85%]" style={{ color: 'var(--text-muted)' }}>
-            {job.sourceFilename} and its clips will be removed. This can&apos;t be undone.
+            {displayTitle(job)} and its clips will be removed. This can&apos;t be undone.
           </p>
           {deleteError && (
             <p className="text-xs" style={{ color: 'var(--danger)' }}>{deleteError}</p>
