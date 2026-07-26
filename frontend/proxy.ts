@@ -1,7 +1,6 @@
 import { NextResponse, NextFetchEvent } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth/auth';
-import { prisma } from '@/lib/prisma/client';
 
 // ── Setup Status Check ──────────────────────────────────────────────────
 // We always fetch the setup status fresh rather than caching it, because
