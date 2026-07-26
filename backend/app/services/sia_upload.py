@@ -55,7 +55,11 @@ async def upload_source_to_sia(
     # complete using the info that's already on the job.
     if job.sia_status == "ready" and job.source_sia_object_id:
         await upsert_pipeline_step(
-            db, job_id, "sia_upload", "complete", 100,
+            db,
+            job_id,
+            "sia_upload",
+            "complete",
+            100,
             f"Source video already stored on Sia: {job.source_sia_object_id[:16]}...",
         )
         return {
@@ -66,8 +70,14 @@ async def upload_source_to_sia(
         }
 
     # Update pipeline step to running
-    await upsert_pipeline_step(db, job_id, "sia_upload", "running", 10,
-                       "Uploading source video to Sia Network...")
+    await upsert_pipeline_step(
+        db,
+        job_id,
+        "sia_upload",
+        "running",
+        10,
+        "Uploading source video to Sia Network...",
+    )
 
     # Read the source file from disk
     video_path = settings.upload_path / f"{job_id}.mp4"
@@ -75,7 +85,10 @@ async def upload_source_to_sia(
         # Fall back to the original filename
         video_path = settings.upload_path / job.source_filename
     if not video_path.exists():
-        return {"passed": False, "message": f"Source video file not found for job {job_id}"}
+        return {
+            "passed": False,
+            "message": f"Source video file not found for job {job_id}",
+        }
 
     file_data = video_path.read_bytes()
     filename = video_path.name
@@ -86,17 +99,29 @@ async def upload_source_to_sia(
         if sdk is not None:
             # Live mode — upload to Sia
             try:
-                from sia_storage import PinnedObject
+                from sia_storage import PinnedObject, UploadOptions
 
-                await upsert_pipeline_step(db, job_id, "sia_upload", "running", 30,
-                                   "Uploading to Sia Network...")
+                await upsert_pipeline_step(
+                    db,
+                    job_id,
+                    "sia_upload",
+                    "running",
+                    30,
+                    "Uploading to Sia Network...",
+                )
 
                 obj = PinnedObject()
-                uploaded = await sdk.upload(obj, file_data, None)
+                uploaded = await sdk.upload(obj, file_data, UploadOptions())
                 sia_object_id = uploaded.id()
 
-                await upsert_pipeline_step(db, job_id, "sia_upload", "running", 60,
-                                   f"Uploaded to Sia ({sia_object_id[:16]}...), pinning...")
+                await upsert_pipeline_step(
+                    db,
+                    job_id,
+                    "sia_upload",
+                    "running",
+                    60,
+                    f"Uploaded to Sia ({sia_object_id[:16]}...), pinning...",
+                )
 
                 # Pin the object
                 try:
@@ -110,15 +135,23 @@ async def upload_source_to_sia(
                 job.sia_hash = sia_object_id
                 job.sia_status = "ready"
 
-                db.add(SiaLog(
-                    job_id=job_id,
-                    step="sia_upload_source",
-                    passed=True,
-                    message=f"Source video uploaded to Sia: {sia_object_id}",
-                ))
+                db.add(
+                    SiaLog(
+                        job_id=job_id,
+                        step="sia_upload_source",
+                        passed=True,
+                        message=f"Source video uploaded to Sia: {sia_object_id}",
+                    )
+                )
 
-                await upsert_pipeline_step(db, job_id, "sia_upload", "complete", 100,
-                                   f"Source video stored on Sia: {sia_object_id[:16]}...")
+                await upsert_pipeline_step(
+                    db,
+                    job_id,
+                    "sia_upload",
+                    "complete",
+                    100,
+                    f"Source video stored on Sia: {sia_object_id[:16]}...",
+                )
 
                 logger.info(f"Sia upload complete for job {job_id}: {sia_object_id}")
                 return {
@@ -132,12 +165,14 @@ async def upload_source_to_sia(
                 error_msg = f"Sia upload failed: {str(e)}"
                 logger.error(f"Sia upload failed for job {job_id}: {e}")
 
-                db.add(SiaLog(
-                    job_id=job_id,
-                    step="sia_upload_source",
-                    passed=False,
-                    message=error_msg,
-                ))
+                db.add(
+                    SiaLog(
+                        job_id=job_id,
+                        step="sia_upload_source",
+                        passed=False,
+                        message=error_msg,
+                    )
+                )
                 # Fall through to demo mode
 
         # Demo mode — generate fake Sia hash
@@ -146,15 +181,23 @@ async def upload_source_to_sia(
         job.sia_hash = demo_hash
         job.sia_status = "ready"
 
-        db.add(SiaLog(
-            job_id=job_id,
-            step="sia_upload_source",
-            passed=True,
-            message=f"Demo: Source video stored with hash {demo_hash}",
-        ))
+        db.add(
+            SiaLog(
+                job_id=job_id,
+                step="sia_upload_source",
+                passed=True,
+                message=f"Demo: Source video stored with hash {demo_hash}",
+            )
+        )
 
-        await upsert_pipeline_step(db, job_id, "sia_upload", "complete", 100,
-                           f"Demo: Source video stored with hash {demo_hash[:16]}...")
+        await upsert_pipeline_step(
+            db,
+            job_id,
+            "sia_upload",
+            "complete",
+            100,
+            f"Demo: Source video stored with hash {demo_hash[:16]}...",
+        )
 
         logger.info(f"Demo Sia upload for job {job_id}: {demo_hash}")
         return {
@@ -168,12 +211,14 @@ async def upload_source_to_sia(
         error_msg = f"Sia upload failed: {str(e)}"
         logger.error(f"Sia upload failed for job {job_id}: {e}")
 
-        db.add(SiaLog(
-            job_id=job_id,
-            step="sia_upload_source",
-            passed=False,
-            message=error_msg,
-        ))
+        db.add(
+            SiaLog(
+                job_id=job_id,
+                step="sia_upload_source",
+                passed=False,
+                message=error_msg,
+            )
+        )
 
         await upsert_pipeline_step(db, job_id, "sia_upload", "failed", 0, error_msg)
         return {"passed": False, "message": error_msg}
