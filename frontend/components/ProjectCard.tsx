@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Job, JobStatus } from '@/lib/types';
-import { RotateCcw, Clock, CheckCircle2, XCircle, Loader2, Play, Film, Trash2 } from 'lucide-react';
+import { ArrowRight, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, Play, Film, Trash2 } from 'lucide-react';
 
 function statusConfig(s: JobStatus) {
   const configs = {
@@ -54,24 +54,60 @@ function displayTitle(job: Job): string {
     : job.sourceFilename;
 }
 
-// Deterministic gradient per project, so the list reads as a set of
-// distinct thumbnails at a glance instead of identical grey tiles —
-// without needing an actual rendered frame from the backend.
-const THUMBNAIL_GRADIENTS: [string, string][] = [
-  ['#312e81', '#7c3aed'],
-  ['#164e63', '#0ea5e9'],
-  ['#4c0519', '#ec4899'],
-  ['#14532d', '#22c55e'],
-  ['#451a03', '#f59e0b'],
-  ['#1e1b4b', '#6366f1'],
-  ['#3b0764', '#c026d3'],
-];
+// A single cohesive hue per project (not random unrelated colors), used
+// to tint a small fanned stack of "clip" rectangles. This hints at what's
+// actually inside — several vertical short-form clips — instead of one
+// flat banner that has nothing to do with the content.
+function hashStr(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return h;
+}
 
-function gradientForId(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  const [a, b] = THUMBNAIL_GRADIENTS[hash % THUMBNAIL_GRADIENTS.length];
-  return `linear-gradient(135deg, ${a} 0%, ${b} 100%)`;
+function paletteForId(id: string) {
+  const hue = hashStr(id) % 360;
+  return {
+    front: `linear-gradient(155deg, hsl(${hue} 72% 46%) 0%, hsl(${(hue + 30) % 360} 70% 32%) 100%)`,
+    mid: `hsl(${hue} 45% 26%)`,
+    back: `hsl(${hue} 40% 17%)`,
+  };
+}
+
+/** Small fanned stack of vertical rectangles standing in for the project's clips. */
+function ClipStackThumbnail({ job }: { job: Job }) {
+  const palette = paletteForId(job.id);
+  const clipCount = job._count?.segments;
+
+  return (
+    <div className="relative shrink-0" style={{ width: 76, height: 108 }}>
+      <div className="absolute inset-0 rounded-lg" style={{
+        background: palette.back,
+        transform: 'rotate(-9deg) translate(-3px, 3px)',
+      }} />
+      <div className="absolute inset-0 rounded-lg" style={{
+        background: palette.mid,
+        transform: 'rotate(6deg) translate(3px, 1px)',
+      }} />
+      <div className="absolute inset-0 rounded-lg flex items-center justify-center overflow-hidden"
+        style={{ background: palette.front, border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 6px 16px rgba(0,0,0,0.35)' }}>
+        <div style={{
+          width: 26, height: 26, borderRadius: '50%',
+          background: 'rgba(0,0,0,0.3)',
+          border: '1px solid rgba(255,255,255,0.4)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Play size={11} fill="white" style={{ color: 'white', marginLeft: 1 }} />
+        </div>
+
+        {clipCount !== undefined && (
+          <div className="absolute bottom-1 right-1 flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px]"
+            style={{ background: 'rgba(0,0,0,0.5)', color: 'white', fontFamily: 'var(--mono)' }}>
+            <Film size={9} />{clipCount}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function TimeAgo({ iso }: { iso: string }) {
@@ -147,77 +183,35 @@ export default function ProjectCard({ job, onDeleted }: ProjectCardProps) {
   return (
     <Link
       href={href}
-      className="relative block group rounded-xl overflow-hidden transition-all duration-200 active:scale-[0.99] sm:hover:scale-[1.01]"
+      className="relative flex items-start gap-3 sm:gap-4 group rounded-xl p-3 sm:p-4 transition-all duration-200 active:scale-[0.99] sm:hover:scale-[1.005]"
       style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}
     >
-      {/* Thumbnail — a generated gradient stands in for a real frame since
-          the backend doesn't produce a poster image yet. Deterministic per
-          job id, so the grid reads as distinct projects at a glance. */}
-      <div className="relative w-full" style={{ aspectRatio: '16 / 10', background: gradientForId(job.id) }}>
-        <div className="absolute inset-0" style={{ background: 'radial-gradient(circle at 28% 22%, rgba(255,255,255,0.12), transparent 55%)' }} />
+      <ClipStackThumbnail job={job} />
 
-        {/* Play affordance */}
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div style={{
-            width: 46, height: 46, borderRadius: '50%',
-            background: 'rgba(0,0,0,0.28)',
-            backdropFilter: 'blur(4px)',
-            border: '1.5px solid rgba(255,255,255,0.35)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Play size={18} fill="white" style={{ color: 'white', marginLeft: 2 }} />
-          </div>
-        </div>
-
-        {/* Status pill */}
-        <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 rounded"
-          style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)' }}>
-          <Icon size={10} style={{ color: cfg.color }} className={cfg.spin ? 'animate-spin' : ''} />
-          <span className="text-xs" style={{ color: cfg.color, fontFamily: 'var(--mono)' }}>{cfg.label}</span>
-        </div>
-
-        {/* Delete — kept visible on the thumbnail so removing a project
-            never requires opening it first. */}
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label={`Delete ${job.sourceFilename}`}
-          onClick={openConfirm}
-          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') openConfirm(e); }}
-          className="absolute top-2 left-2 w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer transition-colors"
-          style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)' }}
-        >
-          <Trash2 size={13} style={{ color: 'rgba(255,255,255,0.85)' }} />
-        </div>
-
-        {/* Duration + clip count */}
-        {(duration || clipCount !== undefined) && (
-          <div className="absolute bottom-2 right-2 flex items-center gap-1.5 px-2 py-1 rounded text-xs"
-            style={{ background: 'rgba(0,0,0,0.55)', color: 'white', fontFamily: 'var(--mono)' }}>
-            {duration && <span>{duration}</span>}
-            {duration && clipCount !== undefined && <span style={{ opacity: 0.5 }}>·</span>}
-            {clipCount !== undefined && (
-              <span className="inline-flex items-center gap-1">
-                <Film size={10} />{clipCount}
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Details */}
-      <div className="p-3.5">
-        <h3
-          className="text-sm font-medium truncate"
-          title={job.sourceFilename}
-          style={{ color: 'var(--text-primary)' }}
-        >
+      {/* Main content */}
+      <div className="flex-1 min-w-0 pt-0.5">
+        <h3 className="text-sm font-medium truncate" title={job.sourceFilename} style={{ color: 'var(--text-primary)' }}>
           {displayTitle(job)}
         </h3>
 
-        <div className="mt-1.5 flex items-center gap-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-          <Clock size={10} />
-          <TimeAgo iso={job.createdAt} />
+        {/* Compact meta row: status pill + duration + clip count + time ago */}
+        <div className="mt-1.5 flex items-center flex-wrap gap-x-2.5 gap-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded"
+            style={{ background: cfg.bg, border: `1px solid ${cfg.color}25` }}>
+            <Icon size={9} style={{ color: cfg.color }} className={cfg.spin ? 'animate-spin' : ''} />
+            <span style={{ color: cfg.color, fontFamily: 'var(--mono)' }}>{cfg.label}</span>
+          </span>
+
+          {duration && <span style={{ fontFamily: 'var(--mono)' }}>{duration}</span>}
+
+          {clipCount !== undefined && (
+            <span>{clipCount} clip{clipCount !== 1 ? 's' : ''}</span>
+          )}
+
+          <span className="inline-flex items-center gap-1">
+            <Clock size={10} />
+            <TimeAgo iso={job.createdAt} />
+          </span>
         </div>
 
         {/* Active pipeline progress bar */}
@@ -229,19 +223,36 @@ export default function ProjectCard({ job, onDeleted }: ProjectCardProps) {
             ? ((completed + running.progressPct / 100) / total) * 100
             : (completed / total) * 100;
           return (
-            <div className="mt-3 score-bar">
+            <div className="mt-2.5 score-bar">
               <div className="score-bar-fill" style={{ width: `${pct}%` }} />
             </div>
           );
         })()}
 
         {job.status === 'failed' && (
-          <div className="mt-2.5 flex items-center gap-1.5 text-xs cursor-pointer hover:opacity-80 py-1"
+          <div className="mt-2 flex items-center gap-1.5 text-xs cursor-pointer hover:opacity-80 py-1"
             style={{ color: 'var(--danger)' }}
             onClick={e => { e.preventDefault(); e.stopPropagation(); alert('Retry not yet wired to API'); }}>
             <RotateCcw size={11} /> Retry job
           </div>
         )}
+      </div>
+
+      {/* Right rail: delete + arrow, always visible so deleting never requires opening the project */}
+      <div className="flex flex-col items-center gap-2 shrink-0">
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label={`Delete ${job.sourceFilename}`}
+          onClick={openConfirm}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') openConfirm(e); }}
+          className="w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer transition-colors hover:bg-[rgba(239,68,68,0.12)]"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          <Trash2 size={14} style={{ opacity: 0.75 }} />
+        </div>
+        <ArrowRight size={14} style={{ color: 'var(--text-muted)' }}
+          className="hidden sm:block transition-transform group-hover:translate-x-1" />
       </div>
 
       {/* Delete confirmation overlay */}
