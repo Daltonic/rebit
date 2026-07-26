@@ -13,22 +13,17 @@ constraint on (job_id, stage). The database itself now guarantees there
 can only ever be one row per (job, stage) — no race is possible, because
 there's no read-then-write gap left to race in.
 
-Usage (identical call signature to the old `_update_step` helpers that
-were duplicated across transcribe.py, extract.py, render.py, sia.py,
-sia_upload.py, and detect.py):
-
-    from app.services.pipeline_steps import upsert_pipeline_step
-    await upsert_pipeline_step(db, job_id, "transcribe", "running", 30, "Extracting audio...")
 """
 
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import func
+from sqlalchemy import func, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import PipelineStep
+from app.database import async_session_factory
+from app.models import Job, PipelineStep
 from app.services.pipeline_events import publish_step_update
 
 logger = logging.getLogger(__name__)
@@ -67,7 +62,9 @@ async def upsert_pipeline_step(
     SSE progress event so the frontend updates in real time.
 
     Args:
-        db: the pipeline's single active session (never opens a new one).
+        db: kept for call-site compatibility; not used for the actual
+            write (see the visibility-fix note in the module docstring
+            for why).
         reset_started_at: pass True only for the transition that starts
             (or restarts) a stage. Progress updates *within* an already-
             running stage should leave the original started_at alone,
@@ -107,7 +104,9 @@ async def upsert_pipeline_step(
         else:
             # Keep the existing started_at if this stage already has one;
             # only set it if this is genuinely the first "running" update.
-            set_["started_at"] = func.coalesce(PipelineStep.started_at, stmt.excluded.started_at)
+            set_["started_at"] = func.coalesce(
+                PipelineStep.started_at, stmt.excluded.started_at
+            )
     elif status in ("complete", "failed"):
         set_["completed_at"] = stmt.excluded.completed_at
 
@@ -117,7 +116,27 @@ async def upsert_pipeline_step(
     )
 
     try:
-        await db.execute(stmt)
+        async with async_session_factory() as visibility_db:
+            await visibility_db.execute(stmt)
+
+            # Mirror the job-level status the same way the orchestrator
+            # does — via STAGE_TO_JOB_STATUS on a "running" transition,
+            # or "failed" on failure — but through a plain UPDATE
+            # instead of the ORM `Job` instance, and on this same
+            # immediately-committed session, so it's visible the moment
+            # it happens rather than only once the whole job finishes.
+            if status == "running":
+                job_status = STAGE_TO_JOB_STATUS.get(stage)
+                if job_status:
+                    await visibility_db.execute(
+                        update(Job).where(Job.id == job_id).values(status=job_status)
+                    )
+            elif status == "failed":
+                await visibility_db.execute(
+                    update(Job).where(Job.id == job_id).values(status="failed")
+                )
+
+            await visibility_db.commit()
     except Exception:
         logger.exception(f"Failed to upsert pipeline step {job_id}/{stage}")
         raise
