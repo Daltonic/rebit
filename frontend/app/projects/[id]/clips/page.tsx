@@ -5,6 +5,12 @@ import ClipCard from '@/components/ClipCard';
 import { ArrowLeft, Download, Loader2 } from 'lucide-react';
 import { Segment, SegmentStatus } from '@/lib/types';
 
+// NOTE: this one still points at the backend directly, unlike the JSON
+// fetches below. Streaming video bytes through a Next.js route needs a
+// dedicated proxy that pipes the response body — that doesn't exist yet.
+// If you hit the same NetworkError here that you did on the job-status
+// fetch, that streaming proxy is the next thing to build (same idea as
+// /api/jobs/[id], but for the clip video bytes).
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
 type SortBy = 'virality' | 'time';
@@ -30,7 +36,7 @@ export default function ClipsPage({ params }: { params: Promise<{ id: string }> 
     const fetchJob = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`${BACKEND_URL}/api/jobs/${id}`);
+        const res = await fetch(`/api/jobs/${id}`);
         if (!res.ok) {
           if (res.status === 404) {
             setError('Job not found');
@@ -58,7 +64,7 @@ export default function ClipsPage({ params }: { params: Promise<{ id: string }> 
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${BACKEND_URL}/api/jobs/${id}`);
+        const res = await fetch(`/api/jobs/${id}`);
         if (res.ok) {
           const data: JobData = await res.json();
           setJobData(data);

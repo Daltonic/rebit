@@ -1,13 +1,11 @@
 'use client';
-import { use, useState, useEffect, useCallback, useRef } from 'react';
+import { use, useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import PipelineTracker from '@/components/PipelineTracker';
 import { ArrowLeft, ArrowRight, Loader2, Play, Trash2 } from 'lucide-react';
 import { PipelineStep, Segment } from '@/lib/types';
 import { usePipelineSSE } from '@/lib/hooks/usePipelineSSE';
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
 function formatDuration(s: number | null) {
   if (!s) return '—';
@@ -57,7 +55,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
 
   const fetchJobStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/api/jobs/${id}`);
+      const res = await fetch(`/api/jobs/${id}`);
       if (!res.ok) {
         if (res.status === 404) {
           setError('Job not found');
@@ -86,8 +84,42 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
 
   // Initial fetch
   useEffect(() => {
-    fetchJobStatus();
-  }, [fetchJobStatus]);
+    let cancelled = false;
+
+    const doFetch = async () => {
+      try {
+        const res = await fetch(`/api/jobs/${id}`);
+        if (!res.ok) {
+          if (res.status === 404) {
+            if (!cancelled) {
+              setError('Job not found');
+              setLoading(false);
+            }
+            return;
+          }
+          throw new Error(`Failed to fetch job: ${res.status}`);
+        }
+        const data: JobData = await res.json();
+        if (!cancelled) {
+          setJobData(data);
+          setLoading(false);
+          setError(null);
+        }
+      } catch (e: unknown) {
+        if (!cancelled) {
+          const message = e instanceof Error ? e.message : 'Failed to load job';
+          setError(message);
+          setLoading(false);
+        }
+      }
+    };
+
+    doFetch();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   // ── Real-time SSE updates (replaces polling) ──────────────────────────
   // When SSE is active, pipeline steps update instantly as the backend
@@ -156,7 +188,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         if (data && terminalStatuses.includes(data.status)) {
           clearInterval(interval);
         }
-      }).catch(() => {});
+      }).catch(() => { });
     }, 5000);
 
     return () => clearInterval(interval);
@@ -344,8 +376,8 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
                   <span style={{ color: 'var(--text-secondary)' }}>{step.stage}</span>
                   <span style={{
                     color: step.status === 'complete' ? 'var(--success)' :
-                           step.status === 'running' ? 'var(--accent-bright)' :
-                           step.status === 'failed' ? 'var(--danger)' : 'var(--text-muted)',
+                      step.status === 'running' ? 'var(--accent-bright)' :
+                        step.status === 'failed' ? 'var(--danger)' : 'var(--text-muted)',
                   }}>
                     {step.status === 'running' ? `${step.progressPct}%` : step.status}
                   </span>
