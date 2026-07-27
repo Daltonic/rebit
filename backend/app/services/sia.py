@@ -19,10 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sia_storage import PinnedObject
 
 from app.config import settings
+from app.database import async_session_factory
 from app.models import Job, Segment, Transcript, SiaLog
 from app.services import sia_client
 from app.services.sia_client import DEMO_PREFIX, is_real_object_id
 from app.services.pipeline_steps import upsert_pipeline_step
+from app.services.pipeline_events import publish_event
 
 logger = logging.getLogger(__name__)
 
@@ -293,12 +295,41 @@ async def _add_sia_log(
     passed: bool,
     message: str,
 ):
-    """Add a Sia log entry."""
-    db.add(
-        SiaLog(
-            job_id=job_id,
-            step=step,
-            passed=passed,
-            message=message,
+    """
+    Add a Sia log entry.
+
+    This used to do `db.add(...)` on the caller's session — which, for
+    every call site in this file, is the pipeline orchestrator's single
+    long-lived session that isn't committed until the *entire* pipeline
+    finishes. That's why the UI only ever showed one log line (the
+    source-upload one, written earlier by a different, already-committed
+    session) until a manual refresh: every other SiaLog row genuinely
+    hadn't reached the database yet.
+
+    Writing through its own short-lived session and committing
+    immediately means each log line is visible to the next `GET
+    /api/jobs/{id}` request (or the live event below) the instant it's
+    created, not just once the whole job finishes.
+    """
+    async with async_session_factory() as log_db:
+        log_db.add(
+            SiaLog(
+                job_id=job_id,
+                step=step,
+                passed=passed,
+                message=message,
+            )
         )
+        await log_db.commit()
+
+    # Push it live too, so the "Sia Logs" panel fills in as uploads
+    # happen instead of only updating on the next full refetch.
+    await publish_event(
+        job_id,
+        {
+            "type": "sia_log",
+            "step": step,
+            "passed": passed,
+            "message": message,
+        },
     )

@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session_factory
 from app.models import Job, PipelineStep
 from app.services.pipeline_steps import upsert_pipeline_step, STAGE_TO_JOB_STATUS
+from app.services.pipeline_events import publish_job_status
 from app.services.sia_upload import upload_source_to_sia
 from app.services.transcribe import transcribe_job
 from app.services.detect import detect_highlights
@@ -272,6 +273,15 @@ async def run_pipeline(
         )
         job.status = STAGE_TO_JOB_STATUS.get(stage_name, job.status)
         await db.flush()
+        # Commit now (not just at pipeline end) so any other session —
+        # a GET /api/jobs/{id} request, this SSE endpoint's initial
+        # snapshot — can actually see the new status, then tell any
+        # live subscribers about it. publish_job_status() previously
+        # existed but was never called anywhere, which is the whole
+        # reason the frontend never learned to refetch on its own.
+        await db.commit()
+        await db.refresh(job)
+        await publish_job_status(job_id, job.status, stage_def["description"])
         logger.info(f"Stage '{stage_name}' now running for job {job_id}")
 
         # ── Execute the stage ────────────────────────────────────────────
@@ -290,6 +300,8 @@ async def run_pipeline(
                 )
                 job.status = "failed"
                 await db.flush()
+                await db.commit()
+                await publish_job_status(job_id, "failed", error_msg)
                 return {
                     "passed": False,
                     "message": error_msg,
@@ -311,6 +323,8 @@ async def run_pipeline(
             )
             job.status = "failed"
             await db.flush()
+            await db.commit()
+            await publish_job_status(job_id, "failed", error_msg)
 
             return {
                 "passed": False,
@@ -332,16 +346,21 @@ async def run_pipeline(
             )
             job.status = "failed"
             await db.flush()
+            await db.commit()
+            error_msg = f"Pipeline stage '{stage_name}' failed: {str(e)}"
+            await publish_job_status(job_id, "failed", error_msg)
 
             return {
                 "passed": False,
-                "message": f"Pipeline stage '{stage_name}' failed: {str(e)}",
+                "message": error_msg,
                 "failed_stage": stage_name,
             }
 
     # All stages complete
     job.status = "complete"
     await db.flush()
+    await db.commit()
+    await publish_job_status(job_id, "complete", "All stages finished")
 
     logger.info(f"Pipeline complete for job {job_id}")
     return {
