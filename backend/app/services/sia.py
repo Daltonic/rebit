@@ -8,6 +8,7 @@ In demo mode, returns fake "demo-sia-{id}" hashes so the pipeline can
 continue without actual Sia infrastructure.
 """
 
+import io
 import json
 import logging
 from pathlib import Path
@@ -15,7 +16,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sia_storage import PinnedObject, UploadOptions
+from sia_storage import PinnedObject
 
 from app.config import settings
 from app.models import Job, Segment, Transcript, SiaLog
@@ -72,7 +73,7 @@ async def store_job_artifacts(
             transcript_data = json.dumps(transcript.json_content).encode("utf-8")
             obj = PinnedObject()
             try:
-                uploaded = await sdk.upload(obj, transcript_data, UploadOptions())
+                uploaded = await sdk.upload(obj, io.BytesIO(transcript_data))
                 transcript.sia_object_id = uploaded.id()
                 await _add_sia_log(
                     db,
@@ -111,7 +112,7 @@ async def store_job_artifacts(
                 clip_data = clip_path.read_bytes()
                 obj = PinnedObject()
                 try:
-                    uploaded = await sdk.upload(obj, clip_data, UploadOptions())
+                    uploaded = await sdk.upload(obj, io.BytesIO(clip_data))
                     segment.sia_object_id = uploaded.id()
                     await _add_sia_log(
                         db,
@@ -147,7 +148,7 @@ async def store_job_artifacts(
             video_data = video_path.read_bytes()
             obj = PinnedObject()
             try:
-                uploaded = await sdk.upload(obj, video_data, UploadOptions())
+                uploaded = await sdk.upload(obj, io.BytesIO(video_data))
                 job.source_sia_object_id = uploaded.id()
                 await _add_sia_log(
                     db,
@@ -176,6 +177,10 @@ async def store_job_artifacts(
             all_object_ids.append(job.source_sia_object_id)
 
         for oid in all_object_ids:
+            # Skip demo hashes — they are not real Sia object IDs
+            if oid.startswith(DEMO_PREFIX):
+                logger.info(f"Skipping pin for demo hash {oid}")
+                continue
             try:
                 pinned = await sdk.object(oid)
                 await sdk.pin_object(pinned)

@@ -13,6 +13,7 @@ this stage complete instantly instead of uploading the same file a
 second time.
 """
 
+import io
 import logging
 
 from sqlalchemy import select
@@ -99,7 +100,7 @@ async def upload_source_to_sia(
         if sdk is not None:
             # Live mode — upload to Sia
             try:
-                from sia_storage import PinnedObject, UploadOptions
+                from sia_storage import PinnedObject
 
                 await upsert_pipeline_step(
                     db,
@@ -111,7 +112,7 @@ async def upload_source_to_sia(
                 )
 
                 obj = PinnedObject()
-                uploaded = await sdk.upload(obj, file_data, UploadOptions())
+                uploaded = await sdk.upload(obj, io.BytesIO(file_data))
                 sia_object_id = uploaded.id()
 
                 await upsert_pipeline_step(
@@ -173,9 +174,10 @@ async def upload_source_to_sia(
                         message=error_msg,
                     )
                 )
-                # Fall through to demo mode
+                await upsert_pipeline_step(db, job_id, "sia_upload", "failed", 0, error_msg)
+                return {"passed": False, "message": error_msg}
 
-        # Demo mode — generate fake Sia hash
+        # SDK is None — demo mode, generate fake Sia hash
         demo_hash = f"{DEMO_PREFIX}{job_id}"
         job.source_sia_object_id = demo_hash
         job.sia_hash = demo_hash

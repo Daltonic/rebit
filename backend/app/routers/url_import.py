@@ -13,6 +13,7 @@ The flow is:
 """
 
 import asyncio
+import io
 import json
 import logging
 import re
@@ -480,7 +481,7 @@ async def _upload_to_sia(
             from sia_storage import PinnedObject
 
             obj = PinnedObject()
-            uploaded = await sdk.upload(obj, file_data, None)
+            uploaded = await sdk.upload(obj, io.BytesIO(file_data))
             sia_object_id = uploaded.id()
 
             try:
