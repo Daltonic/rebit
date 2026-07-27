@@ -6,14 +6,11 @@ Creates vertical (9:16) short-form clips from the original video.
 """
 
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Job, Segment, PipelineStep
+from app.models import Job, Segment
 from app.services.pipeline_steps import upsert_pipeline_step
 from app.services.async_subprocess import run_subprocess, SubprocessTimeoutExpired
 
@@ -116,7 +113,23 @@ async def extract_clips(
                 str(clip_path),
             ]
 
-            ffmpeg_result = await run_subprocess(ffmpeg_cmd, timeout=120)
+            clip_label = f"clip {i + 1}/{len(segments)}"
+            ticks = {"count": 0}
+
+            async def _tick(progress=progress, clip_label=clip_label):
+                ticks["count"] += 1
+                await upsert_pipeline_step(
+                    db,
+                    job_id,
+                    "extract",
+                    "running",
+                    progress,
+                    f"Extracting {clip_label}... (still processing, {ticks['count'] * 15}s elapsed)",
+                )
+
+            ffmpeg_result = await run_subprocess(
+                ffmpeg_cmd, timeout=120, progress_callback=_tick, progress_interval=15.0
+            )
 
             if ffmpeg_result.returncode != 0:
                 stderr_tail = ffmpeg_result.stderr.decode(errors="replace")[-500:]

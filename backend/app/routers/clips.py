@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -166,8 +166,12 @@ async def _fetch_and_cache_from_sia(
 
     logger.info(f"Downloading clip {segment_id} from Sia: {sia_object_id}")
     try:
-        sia_obj = await sdk.object(sia_object_id)
-        data = await sia_obj.data()
+        pinned_obj = await sdk.object(sia_object_id)
+        download = sdk.download(pinned_obj)
+        try:
+            data = await download.read_all()
+        finally:
+            await download.close()
     except Exception as e:
         logger.error(f"Failed to fetch clip {segment_id} from Sia: {e}")
         raise HTTPException(
@@ -272,4 +276,71 @@ async def serve_clip(
     raise HTTPException(
         status_code=404,
         detail="No clip file available for this segment",
+    )
+
+
+@router.get("/{segment_id}/download")
+async def download_clip(
+    job_id: str,
+    segment_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    GET /api/jobs/{job_id}/clips/{segment_id}/download
+
+    Downloads a clip file from Sia (or local filesystem) with
+    ``Content-Disposition: attachment`` so the browser prompts the
+    user to save the file rather than playing it inline.
+
+    Sources tried in order:
+      1. Sia network (primary persistent storage)
+      2. Local filesystem (fast-path fallback)
+      3. 404 — no source available
+    """
+    # Fetch the segment
+    result = await db.execute(
+        select(Segment).where(
+            Segment.id == segment_id,
+            Segment.job_id == job_id,
+        )
+    )
+    segment = result.scalar_one_or_none()
+
+    if not segment:
+        raise HTTPException(status_code=404, detail="Segment not found")
+
+    file_path: Path | None = None
+    # Strategy 1: Sia network
+    if segment.sia_object_id:
+        sdk = await sia_client.get_sdk()
+        if sdk is not None:
+            try:
+                file_path = await _fetch_and_cache_from_sia(
+                    segment_id,
+                    segment.sia_object_id,
+                )
+            except Exception as e:
+                logger.warning(f"Sia download failed for segment {segment_id}: {e}")
+
+    # Strategy 2: Local filesystem fallback
+    if file_path is None and segment.clip_path:
+        local = Path(segment.clip_path)
+        if local.exists() and local.stat().st_size > 0:
+            file_path = local
+
+    if file_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No clip file available for this segment",
+        )
+
+    filename = f"clip-{segment_id}.mp4"
+    return FileResponse(
+        path=file_path,
+        media_type="video/mp4",
+        filename=filename,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
     )

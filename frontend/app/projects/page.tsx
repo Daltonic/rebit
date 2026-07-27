@@ -54,9 +54,9 @@ export default function ProjectsPage() {
     };
 
     fetchJobs();
-    // Poll for updates every 10 seconds
-    const interval = setInterval(fetchJobs, 10000);
-    return () => clearInterval(interval);
+    // No polling — refresh manually by navigating away and back.
+    // Polling every few seconds generates excessive load for no benefit
+    // on a page users visit to review completed or in-progress projects.
   }, [session?.user?.id]);
 
   const filtered = jobs.filter(j => {

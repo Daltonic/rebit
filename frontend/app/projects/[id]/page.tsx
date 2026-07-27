@@ -163,6 +163,26 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
     fetchJobStatus();
   }, [fetchJobStatus]);
 
+  // Sia logs stream in live as each object gets uploaded during the
+  // sia_store stage, instead of only appearing once the whole job
+  // finishes and gets refetched. Dedup by message in case a
+  // reconnect replays something we already have.
+  const handleSiaLog = useCallback((log: { step: string; passed: boolean | null; message: string }) => {
+    setJobData((prev) => {
+      if (!prev) return prev;
+      const already = prev.siaLogs?.some((l) => l.message === log.message);
+      if (already) return prev;
+      const newLog = {
+        id: `live-${prev.siaLogs?.length ?? 0}-${Date.now()}`,
+        step: log.step,
+        passed: log.passed,
+        message: log.message,
+        ts: new Date().toISOString(),
+      };
+      return { ...prev, siaLogs: [...(prev.siaLogs ?? []), newLog] };
+    });
+  }, []);
+
   const handleSseError = useCallback((_error: string) => {
     setSseFailed(true);
   }, []);
@@ -172,11 +192,12 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
     onStepUpdate: handleStepUpdate,
     onJobStatus: handleJobStatus,
     onPipelineComplete: handlePipelineComplete,
+    onSiaLog: handleSiaLog,
     onError: handleSseError,
     enabled: !!jobData && !['complete', 'failed'].includes(jobData.status),
   });
 
-  // ── Polling fallback (only if SSE fails) ──────────────────────────────
+  // ── Fast polling fallback (only if SSE fails) ─────────────────────────
   useEffect(() => {
     if (!jobData || !sseFailed) return;
 
@@ -193,6 +214,28 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
 
     return () => clearInterval(interval);
   }, [jobData?.id, jobData?.status, fetchJobStatus, sseFailed]);
+
+  // ── Background safety-net polling (runs regardless of SSE state) ─────
+  // A slower poll that isn't gated on sseFailed, so if any SSE event
+  // gets missed — a client subscribing at the wrong instant, an event
+  // published between subscribe calls on reconnect — the page still
+  // catches up within 15s instead of needing a manual refresh.
+  useEffect(() => {
+    if (!jobData) return;
+
+    const terminalStatuses = ['complete', 'failed'];
+    if (terminalStatuses.includes(jobData.status)) return;
+
+    const interval = setInterval(() => {
+      fetchJobStatus().then((data) => {
+        if (data && terminalStatuses.includes(data.status)) {
+          clearInterval(interval);
+        }
+      }).catch(() => { });
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [jobData?.id, jobData?.status, fetchJobStatus]);
 
   if (loading) {
     return (

@@ -133,7 +133,20 @@ export default function ClipsPage({ params }: { params: Promise<{ id: string }> 
           {approved > 0 && (
             <button className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium flex-1 sm:flex-initial"
               style={{ background: 'var(--accent)', color: 'white', boxShadow: '0 0 16px var(--accent-glow)' }}
-              onClick={() => alert(`Exporting ${approved} clip${approved !== 1 ? 's' : ''}…`)}>
+              onClick={() => {
+                // Trigger downloads of all approved clips from Sia
+                const approvedSegments = segments.filter(s => s.status === 'approved');
+                approvedSegments.forEach((seg, i) => {
+                  setTimeout(() => {
+                    const a = document.createElement('a');
+                    a.href = `/api/jobs/${id}/clips/${seg.id}/download`;
+                    a.download = `clip-${seg.id}.mp4`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                  }, i * 500); // stagger 500ms apart to avoid browser download throttling
+                });
+              }}>
               <Download size={13} /> Export {approved} clip{approved !== 1 ? 's' : ''}
             </button>
           )}
@@ -192,6 +205,7 @@ export default function ClipsPage({ params }: { params: Promise<{ id: string }> 
               key={seg.id}
               segment={seg}
               sourceUrl={`/api/jobs/${id}/clips/${seg.id}`}
+              jobId={id}
               onApprove={handleApprove}
               onReject={handleReject}
             />

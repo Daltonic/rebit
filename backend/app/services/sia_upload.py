@@ -13,6 +13,7 @@ this stage complete instantly instead of uploading the same file a
 second time.
 """
 
+import asyncio
 import logging
 
 from sqlalchemy import select
@@ -21,13 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Job, SiaLog
 from app.services import sia_client
+from app.services.sia_client import DEMO_PREFIX
 from app.services.pipeline_steps import upsert_pipeline_step
 
 logger = logging.getLogger(__name__)
-
-# ── Demo Mode ────────────────────────────────────────────────────────────
-
-DEMO_PREFIX = "demo-sia-"
 
 
 async def upload_source_to_sia(
@@ -97,85 +95,77 @@ async def upload_source_to_sia(
         sdk = await sia_client.get_sdk()
 
         if sdk is not None:
-            # Live mode — upload to Sia
+            # Live mode — upload to Sia. A failure here is a real failure:
+            # it must NOT fall through to demo mode. Demo mode only exists
+            # for when there's no SDK connection at all (the `else` branch
+            # below) — masking a genuine upload error as demo success is
+            # exactly what left jobs sitting on fake hashes while the UI
+            # showed "Sia: live".
+            from sia_storage import PinnedObject
+
+            await upsert_pipeline_step(
+                db,
+                job_id,
+                "sia_upload",
+                "running",
+                30,
+                "Uploading to Sia Network...",
+            )
+
+            obj = PinnedObject()
+            uploaded = await sia_client.upload_bytes(sdk, obj, file_data)
+            sia_object_id = uploaded.id()
+
+            await upsert_pipeline_step(
+                db,
+                job_id,
+                "sia_upload",
+                "running",
+                60,
+                f"Uploaded to Sia ({sia_object_id[:16]}...), pinning...",
+            )
+
+            # Pin the object we just got back — no need for a separate
+            # sdk.object() lookup, we already have the PinnedObject.
             try:
-                from sia_storage import PinnedObject, UploadOptions
-
-                await upsert_pipeline_step(
-                    db,
-                    job_id,
-                    "sia_upload",
-                    "running",
-                    30,
-                    "Uploading to Sia Network...",
+                await asyncio.wait_for(
+                    sdk.pin_object(uploaded), timeout=sia_client.SIA_PIN_TIMEOUT
                 )
-
-                obj = PinnedObject()
-                uploaded = await sdk.upload(obj, file_data, UploadOptions())
-                sia_object_id = uploaded.id()
-
-                await upsert_pipeline_step(
-                    db,
-                    job_id,
-                    "sia_upload",
-                    "running",
-                    60,
-                    f"Uploaded to Sia ({sia_object_id[:16]}...), pinning...",
-                )
-
-                # Pin the object
-                try:
-                    pinned = await sdk.object(sia_object_id)
-                    await sdk.pin_object(pinned)
-                except Exception as e:
-                    logger.warning(f"Failed to pin Sia object {sia_object_id}: {e}")
-
-                # Update job with Sia info
-                job.source_sia_object_id = sia_object_id
-                job.sia_hash = sia_object_id
-                job.sia_status = "ready"
-
-                db.add(
-                    SiaLog(
-                        job_id=job_id,
-                        step="sia_upload_source",
-                        passed=True,
-                        message=f"Source video uploaded to Sia: {sia_object_id}",
-                    )
-                )
-
-                await upsert_pipeline_step(
-                    db,
-                    job_id,
-                    "sia_upload",
-                    "complete",
-                    100,
-                    f"Source video stored on Sia: {sia_object_id[:16]}...",
-                )
-
-                logger.info(f"Sia upload complete for job {job_id}: {sia_object_id}")
-                return {
-                    "passed": True,
-                    "message": f"Source video uploaded to Sia: {sia_object_id[:16]}...",
-                    "sia_object_id": sia_object_id,
-                    "sia_status": "ready",
-                }
-
             except Exception as e:
-                error_msg = f"Sia upload failed: {str(e)}"
-                logger.error(f"Sia upload failed for job {job_id}: {e}")
+                logger.warning(f"Failed to pin Sia object {sia_object_id}: {e}")
 
-                db.add(
-                    SiaLog(
-                        job_id=job_id,
-                        step="sia_upload_source",
-                        passed=False,
-                        message=error_msg,
-                    )
+            # Update job with Sia info
+            job.source_sia_object_id = sia_object_id
+            job.sia_hash = sia_object_id
+            job.sia_status = "ready"
+
+            db.add(
+                SiaLog(
+                    job_id=job_id,
+                    step="sia_upload_source",
+                    passed=True,
+                    message=f"Source video uploaded to Sia: {sia_object_id}",
                 )
-                # Fall through to demo mode
+            )
 
-        # Demo mode — generate fake Sia hash
+            await upsert_pipeline_step(
+                db,
+                job_id,
+                "sia_upload",
+                "complete",
+                100,
+                f"Source video stored on Sia: {sia_object_id[:16]}...",
+            )
+
+            logger.info(f"Sia upload complete for job {job_id}: {sia_object_id}")
+            return {
+                "passed": True,
+                "message": f"Source video uploaded to Sia: {sia_object_id[:16]}...",
+                "sia_object_id": sia_object_id,
+                "sia_status": "ready",
+            }
+
+        # Demo mode — only reached when there's no SDK connection at all.
         demo_hash = f"{DEMO_PREFIX}{job_id}"
         job.source_sia_object_id = demo_hash
         job.sia_hash = demo_hash

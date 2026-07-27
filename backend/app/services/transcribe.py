@@ -3,19 +3,48 @@ Transcription service using OpenAI Whisper.
 Transcribes video/audio to text with word-level timestamps.
 """
 
-import json
-import tempfile
-from pathlib import Path
-from typing import Optional
-from datetime import datetime, timezone
-
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Job, Transcript, PipelineStep
+from app.models import Job, Transcript
 from app.services.pipeline_steps import upsert_pipeline_step
 from app.services.async_subprocess import run_subprocess, SubprocessTimeoutExpired
+
+
+def _make_progress_ticker(
+    job_id: str,
+    db: AsyncSession,
+    stage: str,
+    base_pct: int,
+    ceiling_pct: int,
+    label: str,
+):
+    """
+    Returns an async no-arg callback for run_subprocess's progress_callback.
+
+    Each tick nudges progress up toward (but never past) ceiling_pct and
+    republishes the step with an elapsed-time message, so a 9-minute
+    whisper call or a multi-minute ffmpeg pass shows up as "still
+    running" instead of leaving the UI frozen on the same percentage
+    until the process finally exits.
+    """
+    ticks = {"count": 0}
+
+    async def _tick():
+        ticks["count"] += 1
+        elapsed = ticks["count"] * 15
+        pct = min(base_pct + ticks["count"] * 2, ceiling_pct)
+        await upsert_pipeline_step(
+            db,
+            job_id,
+            stage,
+            "running",
+            pct,
+            f"{label} (still processing, {elapsed}s elapsed)",
+        )
+
+    return _tick
 
 
 async def transcribe_job(
@@ -78,7 +107,14 @@ async def transcribe_job(
             "-y",
             str(audio_path),
         ]
-        await run_subprocess(ffmpeg_cmd, timeout=300)
+        await run_subprocess(
+            ffmpeg_cmd,
+            timeout=300,
+            progress_callback=_make_progress_ticker(
+                job_id, db, "transcribe", 30, 48, "Extracting audio..."
+            ),
+            progress_interval=15.0,
+        )
 
         await upsert_pipeline_step(
             db, job_id, "transcribe", "running", 50, "Running Whisper transcription..."
@@ -102,7 +138,14 @@ async def transcribe_job(
             "--device",
             settings.whisper_device,
         ]
-        result_whisper = await run_subprocess(whisper_cmd, timeout=600)
+        result_whisper = await run_subprocess(
+            whisper_cmd,
+            timeout=600,
+            progress_callback=_make_progress_ticker(
+                job_id, db, "transcribe", 50, 78, "Running Whisper transcription..."
+            ),
+            progress_interval=15.0,
+        )
 
         if result_whisper.returncode != 0:
             # Fallback: try using whisper via python module.

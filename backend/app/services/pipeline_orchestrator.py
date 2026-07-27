@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session_factory
 from app.models import Job, PipelineStep
 from app.services.pipeline_steps import upsert_pipeline_step, STAGE_TO_JOB_STATUS
+from app.services.pipeline_events import publish_job_status
 from app.services.sia_upload import upload_source_to_sia
 from app.services.transcribe import transcribe_job
 from app.services.detect import detect_highlights
@@ -85,6 +86,24 @@ STAGES = [
     },
 ]
 
+# Per-stage timeout, in seconds. Every stage function is awaited under
+# asyncio.wait_for() using this table — without it, a hung subprocess
+# (ffmpeg choking on an unusual codec, Whisper never returning, a stuck
+# network call) blocks the pipeline task forever. Nothing else in this
+# file was actually enforcing these numbers before; they only existed
+# as a comment on PIPELINE_LOCK_STALE_AFTER describing what "should"
+# happen, which is exactly how a job can sit at "running" for 60+
+# minutes with no error and no way out except deleting the project.
+STAGE_TIMEOUTS = {
+    "sia_upload": 300,  # 5 min
+    "transcribe": 600,  # 10 min
+    "detect": 300,  # 5 min
+    "extract": 300,  # 5 min per ffmpeg extraction pass
+    "render": 300,  # 5 min per ffmpeg render pass
+    "sia_store": 300,  # 5 min
+}
+DEFAULT_STAGE_TIMEOUT = 300
+
 # If a lock is older than this, treat it as abandoned (the process that
 # held it almost certainly crashed or was killed) and allow re-acquisition
 # rather than wedging the job forever. Generously above the sum of every
@@ -112,7 +131,9 @@ async def _try_acquire_lock(job_id: str) -> bool:
             update(Job)
             .where(
                 Job.id == job_id,
-                or_(Job.pipeline_lock_at.is_(None), Job.pipeline_lock_at < stale_cutoff),
+                or_(
+                    Job.pipeline_lock_at.is_(None), Job.pipeline_lock_at < stale_cutoff
+                ),
             )
             .values(pipeline_lock_at=now)
         )
@@ -144,11 +165,16 @@ async def start_pipeline_task(job_id: str, start_from: Optional[str] = None) -> 
     """
     acquired = await _try_acquire_lock(job_id)
     if not acquired:
-        logger.info(f"Pipeline already running for job {job_id}; ignoring duplicate start request")
+        logger.info(
+            f"Pipeline already running for job {job_id}; ignoring duplicate start request"
+        )
         return {"started": False, "message": "Pipeline is already running for this job"}
 
     asyncio.create_task(_run_locked(job_id, start_from))
-    return {"started": True, "message": f"Pipeline started from stage: {start_from or 'beginning'}"}
+    return {
+        "started": True,
+        "message": f"Pipeline started from stage: {start_from or 'beginning'}",
+    }
 
 
 async def _run_locked(job_id: str, start_from: Optional[str]) -> None:
@@ -228,54 +254,113 @@ async def run_pipeline(
             )
         )
         if step_result.scalar_one_or_none():
-            logger.info(f"Stage '{stage_name}' already complete for job {job_id}, skipping")
+            logger.info(
+                f"Stage '{stage_name}' already complete for job {job_id}, skipping"
+            )
             continue
 
         # ── Mark as running. reset_started_at=True because this is a genuine
         # (re)start of the stage — if a previous attempt failed, its stale
         # started_at should not be counted toward this attempt's elapsed time.
         await upsert_pipeline_step(
-            db, job_id, stage_name, "running", 5, stage_def["description"],
+            db,
+            job_id,
+            stage_name,
+            "running",
+            5,
+            stage_def["description"],
             reset_started_at=True,
         )
         job.status = STAGE_TO_JOB_STATUS.get(stage_name, job.status)
         await db.flush()
+        # Commit now (not just at pipeline end) so any other session —
+        # a GET /api/jobs/{id} request, this SSE endpoint's initial
+        # snapshot — can actually see the new status, then tell any
+        # live subscribers about it. publish_job_status() previously
+        # existed but was never called anywhere, which is the whole
+        # reason the frontend never learned to refetch on its own.
+        await db.commit()
+        await db.refresh(job)
+        await publish_job_status(job_id, job.status, stage_def["description"])
         logger.info(f"Stage '{stage_name}' now running for job {job_id}")
 
         # ── Execute the stage ────────────────────────────────────────────
+        timeout = STAGE_TIMEOUTS.get(stage_name, DEFAULT_STAGE_TIMEOUT)
         try:
-            result = await stage_func(job_id, db)
+            result = await asyncio.wait_for(stage_func(job_id, db), timeout=timeout)
 
             if result.get("passed"):
-                logger.info(f"Stage '{stage_name}' completed successfully for job {job_id}")
+                logger.info(
+                    f"Stage '{stage_name}' completed successfully for job {job_id}"
+                )
             else:
                 error_msg = result.get("message", f"Stage '{stage_name}' failed")
-                logger.error(f"Pipeline stage '{stage_name}' failed for job {job_id}: {error_msg}")
+                logger.error(
+                    f"Pipeline stage '{stage_name}' failed for job {job_id}: {error_msg}"
+                )
                 job.status = "failed"
                 await db.flush()
+                await db.commit()
+                await publish_job_status(job_id, "failed", error_msg)
                 return {
                     "passed": False,
                     "message": error_msg,
                     "failed_stage": stage_name,
                 }
 
-        except Exception as e:
-            logger.error(f"Pipeline stage '{stage_name}' threw exception for job {job_id}: {e}")
+        except asyncio.TimeoutError:
+            error_msg = f"Stage '{stage_name}' timed out after {timeout}s"
+            logger.error(
+                f"Pipeline stage '{stage_name}' timed out for job {job_id} after {timeout}s"
+            )
             await upsert_pipeline_step(
-                db, job_id, stage_name, "failed", 0, f"Failed: {str(e)[:200]}",
+                db,
+                job_id,
+                stage_name,
+                "failed",
+                0,
+                error_msg,
             )
             job.status = "failed"
             await db.flush()
+            await db.commit()
+            await publish_job_status(job_id, "failed", error_msg)
 
             return {
                 "passed": False,
-                "message": f"Pipeline stage '{stage_name}' failed: {str(e)}",
+                "message": error_msg,
+                "failed_stage": stage_name,
+            }
+
+        except Exception as e:
+            logger.error(
+                f"Pipeline stage '{stage_name}' threw exception for job {job_id}: {e}"
+            )
+            await upsert_pipeline_step(
+                db,
+                job_id,
+                stage_name,
+                "failed",
+                0,
+                f"Failed: {str(e)[:200]}",
+            )
+            job.status = "failed"
+            await db.flush()
+            await db.commit()
+            error_msg = f"Pipeline stage '{stage_name}' failed: {str(e)}"
+            await publish_job_status(job_id, "failed", error_msg)
+
+            return {
+                "passed": False,
+                "message": error_msg,
                 "failed_stage": stage_name,
             }
 
     # All stages complete
     job.status = "complete"
     await db.flush()
+    await db.commit()
+    await publish_job_status(job_id, "complete", "All stages finished")
 
     logger.info(f"Pipeline complete for job {job_id}")
     return {

@@ -255,13 +255,14 @@ function VideoPlaceholder() {
 interface ClipCardProps {
   segment: Segment;
   sourceUrl?: string;
+  jobId?: string;
   onApprove?: (id: string) => void;
   onReject?: (id: string) => void;
 }
 
 const TRANSCRIPT_CLAMP_LENGTH = 130;
 
-export default function ClipCard({ segment, sourceUrl, onApprove, onReject }: ClipCardProps) {
+export default function ClipCard({ segment, sourceUrl, jobId, onApprove, onReject }: ClipCardProps) {
   const [status, setStatus] = useState(segment.status);
   const [expanded, setExpanded] = useState(false);
   const clipDuration = segment.endSeconds - segment.startSeconds;
@@ -392,7 +393,17 @@ export default function ClipCard({ segment, sourceUrl, onApprove, onReject }: Cl
         <div className="flex gap-2 pt-1" style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 10 }}>
           {status === 'approved' ? (
             <button
-              onClick={e => e.stopPropagation()}
+              onClick={e => {
+                e.stopPropagation();
+                if (!jobId) return;
+                // Trigger a browser download by creating a temporary anchor
+                const a = document.createElement('a');
+                a.href = `/api/jobs/${jobId}/clips/${segment.id}/download`;
+                a.download = `clip-${segment.id}.mp4`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+              }}
               className="flex-1 flex items-center justify-center gap-1.5 py-2.5 sm:py-2 rounded text-xs font-medium transition-colors"
               style={{ background: 'rgba(16,185,129,0.1)', color: 'var(--success)', border: '1px solid rgba(16,185,129,0.2)', cursor: 'pointer' }}
             >

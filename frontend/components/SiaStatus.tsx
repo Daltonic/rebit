@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Server, Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { Wifi, WifiOff, Loader2 } from 'lucide-react';
 
 interface SiaStatusData {
   connected: boolean;
@@ -33,11 +33,24 @@ export default function SiaStatus() {
 
     fetchStatus();
 
-    // Poll every 30 seconds
-    const interval = setInterval(fetchStatus, 30_000);
+    // Refresh periodically, but only when the page is visible.
+    // Sia connection status rarely changes mid-session, so there's
+    // no need to hammer the backend when the tab is backgrounded.
+    function handleVisibility() {
+      if (document.visibilityState === 'visible') {
+        fetchStatus();
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    // Poll every 60 seconds as a fallback (only when visible anyway
+    // due to the visibility guard inside fetchStatus — but this
+    // ensures eventual freshness).
+    const interval = setInterval(fetchStatus, 60_000);
     return () => {
       mounted = false;
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 

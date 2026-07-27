@@ -21,7 +21,7 @@ sites only need small changes.
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,8 @@ class SubprocessTimeoutExpired(Exception):
 async def run_subprocess(
     cmd: list[str],
     timeout: Optional[float] = None,
+    progress_callback: Optional[Callable[[], Awaitable[None]]] = None,
+    progress_interval: float = 15.0,
 ) -> SubprocessResult:
     """
     Run a subprocess without blocking the event loop.
@@ -59,6 +61,14 @@ async def run_subprocess(
         cmd: argv list, same as subprocess.run's first positional arg.
         timeout: seconds to wait before killing the process and
             raising SubprocessTimeoutExpired.
+        progress_callback: optional no-arg async callable invoked every
+            `progress_interval` seconds while the process is still
+            running. This is what lets a 9-minute whisper call or a
+            30-second ffmpeg render publish "still processing" events
+            instead of going completely silent — `proc.communicate()`
+            itself has no hook for partial progress, so a sibling task
+            ticks alongside it and calls back on a timer.
+        progress_interval: seconds between progress_callback calls.
 
     Returns:
         SubprocessResult with returncode, stdout, stderr (bytes) — the
@@ -71,8 +81,23 @@ async def run_subprocess(
         stderr=asyncio.subprocess.PIPE,
     )
 
+    communicate_task = asyncio.ensure_future(proc.communicate())
+    ticker_task: Optional[asyncio.Task] = None
+
+    if progress_callback is not None:
+
+        async def _tick():
+            while True:
+                await asyncio.sleep(progress_interval)
+                try:
+                    await progress_callback()
+                except Exception as e:
+                    logger.warning(f"progress_callback failed for {cmd[0]}: {e}")
+
+        ticker_task = asyncio.ensure_future(_tick())
+
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout, stderr = await asyncio.wait_for(communicate_task, timeout=timeout)
     except asyncio.TimeoutError:
         # Kill and reap the child so it doesn't linger as a zombie or
         # keep an output file open after we've given up waiting on it.
@@ -82,6 +107,13 @@ async def run_subprocess(
         except ProcessLookupError:
             pass
         raise SubprocessTimeoutExpired(cmd, timeout)
+    finally:
+        if ticker_task is not None:
+            ticker_task.cancel()
+            try:
+                await ticker_task
+            except asyncio.CancelledError:
+                pass
 
     return SubprocessResult(
         returncode=proc.returncode,
