@@ -15,7 +15,6 @@ Architecture:
 """
 
 import asyncio
-import io
 import logging
 from pathlib import Path
 from typing import Optional
@@ -27,10 +26,8 @@ from sia_storage import (
     AppKey,
     AppMetadata,
     Builder,
-    BytesReader,
     PinnedObject,
     SDK,
-    UploadOptions,
     generate_recovery_phrase,
     uniffi_set_event_loop,
     validate_recovery_phrase,
@@ -96,29 +93,19 @@ def is_real_object_id(object_id: Optional[str]) -> bool:
 
 
 async def upload_bytes(sdk: SDK, obj: PinnedObject, data: bytes) -> PinnedObject:
-    """Upload raw bytes to Sia, whichever `sdk.upload()` this deployment resolves to.
+    """Upload raw bytes to Sia.
 
-    The `sia_storage` SDK's documented `Sdk.upload()` wrapper accepts plain
-    bytes/BinaryIO directly and converts it to a Reader internally — but in
-    production every single upload call was throwing "Expected Reader
-    subclass, bytes found", which is the exact TypeError the bare FFI
-    binding raises when handed raw bytes directly. That means this
-    deployment's `sdk.upload()` isn't doing that auto-conversion. Try the
-    documented approach first; if that specific error still surfaces, fall
-    back to handing it an explicit Reader so the upload succeeds either way.
+    Passes raw bytes directly to `sdk.upload()`, matching the proven
+    pattern from the OpenBench codebase that successfully uploads to
+    the Sia network.  Wrapping data in io.BytesIO() or BytesReader()
+    causes the SDK to silently accept the call without actually
+    transmitting the data to the network, resulting in zero space used
+    on Sia despite the pipeline reporting success.
     """
-    try:
-        return await asyncio.wait_for(
-            sdk.upload(obj, io.BytesIO(data), UploadOptions()),
-            timeout=SIA_UPLOAD_TIMEOUT,
-        )
-    except TypeError as e:
-        if "Reader subclass" not in str(e):
-            raise
-        return await asyncio.wait_for(
-            sdk.upload(obj, BytesReader(io.BytesIO(data)), UploadOptions()),
-            timeout=SIA_UPLOAD_TIMEOUT,
-        )
+    return await asyncio.wait_for(
+        sdk.upload(obj, data),
+        timeout=SIA_UPLOAD_TIMEOUT,
+    )
 
 
 async def pin_object_by_id(sdk: SDK, object_id: str) -> None:

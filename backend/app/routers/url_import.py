@@ -484,11 +484,12 @@ async def _upload_to_sia(
             uploaded = await sdk.upload(obj, io.BytesIO(file_data))
             sia_object_id = uploaded.id()
 
-            try:
-                pinned = await sdk.object(sia_object_id)
-                await sdk.pin_object(pinned)
-            except Exception as e:
-                logger.warning(f"Failed to pin Sia object {sia_object_id}: {e}")
+            # NOTE: sdk.upload() already returns a PinnedObject that is
+            # implicitly pinned by the Sia indexer during upload. The
+            # separate sdk.object() + sdk.pin_object() call that used to
+            # live here was redundant — it performed a second lookup that
+            # often failed with "object not found" because the indexer
+            # hadn't finished propagating yet. The upload itself succeeded.
 
             db.add(
                 SiaLog(

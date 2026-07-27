@@ -75,6 +75,15 @@ async def store_job_artifacts(
             try:
                 uploaded = await sia_client.upload_bytes(sdk, obj, transcript_data)
                 transcript.sia_object_id = uploaded.id()
+                # Pin the transcript object (required for data to persist on Sia)
+                try:
+                    await asyncio.wait_for(
+                        sdk.pin_object(uploaded), timeout=sia_client.SIA_PIN_TIMEOUT
+                    )
+                except Exception as pin_err:
+                    logger.warning(
+                        f"Failed to pin transcript object {uploaded.id()}: {pin_err}"
+                    )
                 await _add_sia_log(
                     db,
                     job_id,
@@ -114,6 +123,15 @@ async def store_job_artifacts(
                 try:
                     uploaded = await sia_client.upload_bytes(sdk, obj, clip_data)
                     segment.sia_object_id = uploaded.id()
+                    # Pin the clip object (required for data to persist on Sia)
+                    try:
+                        await asyncio.wait_for(
+                            sdk.pin_object(uploaded), timeout=sia_client.SIA_PIN_TIMEOUT
+                        )
+                    except Exception as pin_err:
+                        logger.warning(
+                            f"Failed to pin clip object {uploaded.id()}: {pin_err}"
+                        )
                     await _add_sia_log(
                         db,
                         job_id,
@@ -167,6 +185,15 @@ async def store_job_artifacts(
                 try:
                     uploaded = await sia_client.upload_bytes(sdk, obj, video_data)
                     job.source_sia_object_id = uploaded.id()
+                    # Pin the source video object (required for data to persist on Sia)
+                    try:
+                        await asyncio.wait_for(
+                            sdk.pin_object(uploaded), timeout=sia_client.SIA_PIN_TIMEOUT
+                        )
+                    except Exception as pin_err:
+                        logger.warning(
+                            f"Failed to pin source video object {uploaded.id()}: {pin_err}"
+                        )
                     await _add_sia_log(
                         db,
                         job_id,
@@ -182,10 +209,16 @@ async def store_job_artifacts(
                         db, job_id, "upload_source", False, f"Source upload failed: {e}"
                     )
 
-        # Step 4: Pin all objects
-        await upsert_pipeline_step(
-            db, job_id, "sia_store", "running", 85, "Pinning objects on Sia..."
-        )
+        # Step 4: Collect all uploaded object IDs
+        # Each upload above is followed by an explicit sdk.pin_object()
+        # call on the returned PinnedObject.  Pinning is required for the
+        # data to persist on the Sia network — without it, the indexer
+        # may acknowledge the upload but never actually store the data,
+        # resulting in zero space used on Sia despite the pipeline
+        # reporting success.  The pin is done inline (on the same
+        # PinnedObject returned by upload) rather than via a separate
+        # sdk.object() lookup, which avoids "object not found" errors
+        # when the indexer hasn't finished propagating the upload yet.
         all_object_ids = []
         if transcript and transcript.sia_object_id:
             all_object_ids.append(transcript.sia_object_id)
@@ -194,24 +227,6 @@ async def store_job_artifacts(
                 all_object_ids.append(segment.sia_object_id)
         if job.source_sia_object_id:
             all_object_ids.append(job.source_sia_object_id)
-
-        for oid in all_object_ids:
-            if not is_real_object_id(oid):
-                # A demo hash (e.g. left over from an earlier failed run
-                # of sia_upload) has no business reaching the live SDK's
-                # pin call — that's exactly what produced "hex error:
-                # Unexpected length". Skip it instead.
-                logger.warning(f"Skipping pin for non-live object id: {oid}")
-                continue
-            try:
-                pinned = await asyncio.wait_for(
-                    sdk.object(oid), timeout=sia_client.SIA_PIN_TIMEOUT
-                )
-                await asyncio.wait_for(
-                    sdk.pin_object(pinned), timeout=sia_client.SIA_PIN_TIMEOUT
-                )
-            except Exception as e:
-                logger.warning(f"Failed to pin {oid}: {e}")
 
         # Update job with Sia hash
         if all_object_ids:
@@ -231,33 +246,47 @@ async def store_job_artifacts(
         # ── Clean up local files ──────────────────────────────────────────
         # All artifacts are now on the Sia Network — the local copies are no
         # longer needed and should be removed to keep the server clean.
-        cleanup_result = cleanup_job_files(job_id)
-        if cleanup_result["upload_deleted"] or cleanup_result["output_deleted"]:
-            logger.info(
-                f"Cleaned up local files for job {job_id}: "
-                f"upload={cleanup_result['upload_deleted']}, "
-                f"output={cleanup_result['output_deleted']}"
-            )
-        if cleanup_result["errors"]:
-            for err in cleanup_result["errors"]:
-                logger.warning(f"Cleanup warning for job {job_id}: {err}")
-
-        await _add_sia_log(
-            db,
-            job_id,
-            "local_cleanup",
-            not bool(cleanup_result["errors"]),
-            "Local files cleaned up after Sia storage"
-            if not cleanup_result["errors"]
-            else f"Cleanup completed with {len(cleanup_result['errors'])} warning(s)",
+        # Cleanup only runs when ALL uploads succeeded (every segment that
+        # had a clip_path now has a sia_object_id). If any upload failed,
+        # local files are preserved so the pipeline can be retried.
+        cleanup_result = None
+        all_uploads_succeeded = all(
+            seg.sia_object_id is not None
+            for seg in segments
         )
+        if all_uploads_succeeded:
+            cleanup_result = cleanup_job_files(job_id)
+            if cleanup_result["upload_deleted"] or cleanup_result["output_deleted"]:
+                logger.info(
+                    f"Cleaned up local files for job {job_id}: "
+                    f"upload={cleanup_result['upload_deleted']}, "
+                    f"output={cleanup_result['output_deleted']}"
+                )
+            if cleanup_result["errors"]:
+                for err in cleanup_result["errors"]:
+                    logger.warning(f"Cleanup warning for job {job_id}: {err}")
+
+            await _add_sia_log(
+                db,
+                job_id,
+                "local_cleanup",
+                not bool(cleanup_result["errors"]),
+                "Local files cleaned up after Sia storage"
+                if not cleanup_result["errors"]
+                else f"Cleanup completed with {len(cleanup_result['errors'])} warning(s)",
+            )
+        else:
+            logger.info(
+                f"Skipping local file cleanup for job {job_id}: "
+                f"not all clips were uploaded to Sia successfully"
+            )
 
         return {
             "passed": True,
             "message": f"Stored {len(all_object_ids)} objects on Sia",
             "sia_hash": job.sia_hash,
             "sia_status": "ready",
-            "cleanup": cleanup_result,
+            "cleanup": cleanup_result if all_uploads_succeeded else None,
         }
 
     except Exception as e:
