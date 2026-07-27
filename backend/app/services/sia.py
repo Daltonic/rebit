@@ -23,6 +23,7 @@ from app.database import async_session_factory
 from app.models import Job, Segment, Transcript, SiaLog
 from app.services import sia_client
 from app.services.sia_client import DEMO_PREFIX, is_real_object_id
+from app.services.cleanup import cleanup_job_files
 from app.services.pipeline_steps import upsert_pipeline_step
 from app.services.pipeline_events import publish_event
 
@@ -227,11 +228,36 @@ async def store_job_artifacts(
         # the one deciding "the whole pipeline is done" — that's an
         # orchestrator-level fact, not a stage-level one.
 
+        # ── Clean up local files ──────────────────────────────────────────
+        # All artifacts are now on the Sia Network — the local copies are no
+        # longer needed and should be removed to keep the server clean.
+        cleanup_result = cleanup_job_files(job_id)
+        if cleanup_result["upload_deleted"] or cleanup_result["output_deleted"]:
+            logger.info(
+                f"Cleaned up local files for job {job_id}: "
+                f"upload={cleanup_result['upload_deleted']}, "
+                f"output={cleanup_result['output_deleted']}"
+            )
+        if cleanup_result["errors"]:
+            for err in cleanup_result["errors"]:
+                logger.warning(f"Cleanup warning for job {job_id}: {err}")
+
+        await _add_sia_log(
+            db,
+            job_id,
+            "local_cleanup",
+            not bool(cleanup_result["errors"]),
+            "Local files cleaned up after Sia storage"
+            if not cleanup_result["errors"]
+            else f"Cleanup completed with {len(cleanup_result['errors'])} warning(s)",
+        )
+
         return {
             "passed": True,
             "message": f"Stored {len(all_object_ids)} objects on Sia",
             "sia_hash": job.sia_hash,
             "sia_status": "ready",
+            "cleanup": cleanup_result,
         }
 
     except Exception as e:
