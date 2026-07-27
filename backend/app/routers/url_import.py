@@ -13,8 +13,6 @@ The flow is:
 """
 
 import asyncio
-import io
-import json
 import logging
 import re
 import uuid
@@ -24,12 +22,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import AppSettings, Job, SiaLog
+from app.models import Job, SiaLog
 from app.services import sia_client
 from app.services.pipeline_orchestrator import start_pipeline_task
 
@@ -41,7 +38,9 @@ router = APIRouter(prefix="/api", tags=["url-import"])
 
 class UrlImportRequest(BaseModel):
     url: str = Field(..., description="Direct media URL")
-    user_id: Optional[str] = Field(None, alias="userId", description="Authenticated user ID")
+    user_id: Optional[str] = Field(
+        None, alias="userId", description="Authenticated user ID"
+    )
 
 
 class UrlImportResponse(BaseModel):
@@ -481,15 +480,24 @@ async def _upload_to_sia(
             from sia_storage import PinnedObject
 
             obj = PinnedObject()
-            uploaded = await sdk.upload(obj, io.BytesIO(file_data))
+            uploaded = await sia_client.upload_bytes(sdk, obj, file_data)
             sia_object_id = uploaded.id()
 
-            # NOTE: sdk.upload() already returns a PinnedObject that is
-            # implicitly pinned by the Sia indexer during upload. The
-            # separate sdk.object() + sdk.pin_object() call that used to
-            # live here was redundant — it performed a second lookup that
-            # often failed with "object not found" because the indexer
-            # hadn't finished propagating yet. The upload itself succeeded.
+            # Pin the object we just got back. Uploads are NOT implicitly
+            # pinned by the Sia indexer — skipping this call is what left
+            # jobs with a valid-looking object ID but zero bytes actually
+            # persisted on the network. Pinning the PinnedObject we already
+            # have (instead of a separate sdk.object() lookup) also avoids
+            # "object not found" errors from the indexer not having
+            # finished propagating the upload yet.
+            try:
+                await asyncio.wait_for(
+                    sdk.pin_object(uploaded), timeout=sia_client.SIA_PIN_TIMEOUT
+                )
+            except Exception as pin_err:
+                logger.warning(
+                    f"Failed to pin Sia object {sia_object_id} for job {job_id}: {pin_err}"
+                )
 
             db.add(
                 SiaLog(
@@ -698,7 +706,9 @@ async def import_from_url(
         # stays non-"ready", and the orchestrator's own sia_upload stage
         # will retry the upload for real once the pipeline runs (see the
         # idempotency check at the top of upload_source_to_sia()).
-        logger.error(f"Eager Sia upload failed for job {job_id}, pipeline will retry: {e}")
+        logger.error(
+            f"Eager Sia upload failed for job {job_id}, pipeline will retry: {e}"
+        )
 
     # ── Step 4: Save locally (already downloaded, just copy to uploads) ──
     try:

@@ -166,8 +166,12 @@ async def _fetch_and_cache_from_sia(
 
     logger.info(f"Downloading clip {segment_id} from Sia: {sia_object_id}")
     try:
-        sia_obj = await sdk.object(sia_object_id)
-        data = await sia_obj.data()
+        pinned_obj = await sdk.object(sia_object_id)
+        download = await sdk.download(pinned_obj)
+        try:
+            data = await download.read_all()
+        finally:
+            await download.close()
     except Exception as e:
         logger.error(f"Failed to fetch clip {segment_id} from Sia: {e}")
         raise HTTPException(
@@ -317,9 +321,7 @@ async def download_clip(
                     segment.sia_object_id,
                 )
             except Exception as e:
-                logger.warning(
-                    f"Sia download failed for segment {segment_id}: {e}"
-                )
+                logger.warning(f"Sia download failed for segment {segment_id}: {e}")
 
     # Strategy 2: Local filesystem fallback
     if file_path is None and segment.clip_path:
