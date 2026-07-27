@@ -18,50 +18,41 @@ function formatDur(s: number) {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
-/* ─── Custom video player ─── */
-function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeconds: number; endSeconds: number }) {
+/* ─── Custom video player ───
+ * `src` already points at the rendered, per-segment clip file (clips.py
+ * serves the file the pipeline extracted for this one segment, not the
+ * original source video), so it always starts at 0. This player just
+ * plays that file natively — it does not re-seek using the segment's
+ * startSeconds/endSeconds, which are offsets into the ORIGINAL source
+ * video and have no meaning inside the already-trimmed clip.
+ */
+function VideoPlayer({ src }: { src: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [currentTime, setCurrentTime] = useState(startSeconds);
-  const [duration, setDuration] = useState(endSeconds - startSeconds);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const [hovered, setHovered] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const initialSeekDone = useRef(false);
-  const clipDuration = endSeconds - startSeconds;
 
-  // Seek to start once metadata loads
   const onMeta = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
     setDuration(v.duration);
-    if (!initialSeekDone.current) {
-      initialSeekDone.current = true;
-      v.currentTime = startSeconds;
-    }
-  }, [startSeconds]);
+  }, []);
 
   const onTimeUpdate = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
-    // Stop at endSeconds
-    if (v.currentTime >= endSeconds) {
-      v.pause();
-      v.currentTime = startSeconds;
-      setPlaying(false);
-      setProgress(0);
-      setCurrentTime(startSeconds);
-      return;
-    }
-    const elapsed = v.currentTime - startSeconds;
     setCurrentTime(v.currentTime);
-    setProgress(clipDuration > 0 ? (elapsed / clipDuration) * 100 : 0);
-  }, [startSeconds, endSeconds, clipDuration]);
+    setProgress(v.duration > 0 ? (v.currentTime / v.duration) * 100 : 0);
+  }, []);
 
   const onEnded = useCallback(() => {
     setPlaying(false);
     setProgress(0);
+    setCurrentTime(0);
   }, []);
 
   const onError = useCallback(() => {
@@ -97,8 +88,8 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) {
-      // If we're past end, reset
-      if (v.currentTime >= endSeconds) v.currentTime = startSeconds;
+      // If playback had reached the end, restart from the top.
+      if (v.currentTime >= v.duration) v.currentTime = 0;
       v.play().catch(() => setError('Playback failed. Check the video source.'));
       setPlaying(true);
     } else {
@@ -127,13 +118,13 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
     if (!v || !v.duration) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    v.currentTime = startSeconds + ratio * clipDuration;
+    v.currentTime = ratio * v.duration;
   };
 
   if (error) {
     return (
       <div className="relative w-full flex flex-col items-center justify-center gap-2"
-        style={{ height: 180, background: '#0a0a0a' }}>
+        style={{ aspectRatio: '9 / 16', background: '#0a0a0a' }}>
         <AlertCircle size={24} style={{ color: 'var(--text-muted)' }} />
         <p style={{ color: 'var(--text-muted)', fontSize: 11, textAlign: 'center', maxWidth: 200 }}>{error}</p>
       </div>
@@ -143,7 +134,7 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
   return (
     <div
       className="relative w-full select-none"
-      style={{ height: 180, background: '#0a0a0a', cursor: 'pointer' }}
+      style={{ aspectRatio: '9 / 16', background: '#0a0a0a', cursor: 'pointer' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={toggle}
@@ -222,7 +213,7 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
           </button>
 
           <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontFamily: 'var(--mono)', letterSpacing: '0.03em' }}>
-            {formatDur(currentTime - startSeconds)} / {formatDur(clipDuration)}
+            {formatDur(currentTime)} / {formatDur(duration)}
           </span>
 
           <div style={{ flex: 1 }} />
@@ -247,7 +238,7 @@ function VideoPlayer({ src, startSeconds, endSeconds }: { src: string; startSeco
 function VideoPlaceholder() {
   return (
     <div className="relative w-full flex items-center justify-center"
-      style={{ height: 180, background: 'var(--bg-elevated)' }}>
+      style={{ aspectRatio: '9 / 16', background: 'var(--bg-elevated)' }}>
       <div style={{
         width: 44, height: 44, borderRadius: '50%',
         background: 'rgba(124,58,237,0.15)',
@@ -311,11 +302,7 @@ export default function ClipCard({ segment, sourceUrl, onApprove, onReject }: Cl
       {/* Video area */}
       <div style={{ position: 'relative' }}>
         {sourceUrl
-          ? <VideoPlayer
-            src={sourceUrl}
-            startSeconds={segment.startSeconds}
-            endSeconds={segment.endSeconds}
-          />
+          ? <VideoPlayer src={sourceUrl} />
           : <VideoPlaceholder />
         }
 

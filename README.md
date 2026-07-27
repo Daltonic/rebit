@@ -111,7 +111,27 @@ ENV
 
 That's it. The frontend `.env` above is the complete set of variables needed for local development. The backend `.env.example` contains defaults for the remaining backend-specific variables — adjust as needed.
 
-#### 2. Start services individually
+#### 2. Install system dependencies
+
+Before starting services, install FFmpeg — required for audio extraction, clip extraction, and vertical rendering:
+
+```bash
+# Debian / Ubuntu / WSL
+sudo apt update && sudo apt install -y ffmpeg
+
+# macOS
+brew install ffmpeg
+
+# Fedora
+sudo dnf install -y ffmpeg
+
+# Arch Linux
+sudo pacman -S ffmpeg
+```
+
+> **Note:** Whisper is installed automatically via `pip install -r requirements.txt` (the `openai-whisper` package), but it requires FFmpeg on your system — hence the installation above.
+
+#### 3. Start services individually
 
 > **Prerequisite:** Dev mode requires **PostgreSQL** already running on your machine. Make sure it is up before starting the application servers. If you don't have it running yet, start it first:
 
@@ -153,7 +173,7 @@ npm run dev
 
 **First boot:** Open http://localhost:3000 and complete the **Setup Wizard** (Sia → Providers → Sign Up). See the Docker section above for details on each step.
 
-#### 3. Setup wizard (environment variables it saves)
+#### 4. Setup wizard (environment variables it saves)
 
 The wizard persists configuration into the database via these API endpoints:
 
@@ -396,9 +416,9 @@ The heuristic engine runs locally and requires no external API keys. Nearby segm
 
 ### URL Import
 
-Videos can be imported from URLs (YouTube, Vimeo, TikTok, etc.) using yt-dlp. The process:
+Videos can be imported from URLs (YouTube, Vimeo, TikTok, etc.). The process:
 1. User pastes a URL and clicks "Check URL" to fetch video metadata
-2. User confirms the import, triggering download via yt-dlp
+2. User confirms the import, triggering the download
 3. Downloaded video enters the same pipeline as file uploads
 
 ---

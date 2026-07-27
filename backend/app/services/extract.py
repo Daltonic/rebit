@@ -5,7 +5,7 @@ Uses ffmpeg to extract video segments based on detected highlights.
 Creates vertical (9:16) short-form clips from the original video.
 """
 
-import subprocess
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Job, Segment, PipelineStep
 from app.services.pipeline_steps import upsert_pipeline_step
+from app.services.async_subprocess import run_subprocess, SubprocessTimeoutExpired
+
+logger = logging.getLogger(__name__)
 
 
 async def extract_clips(
@@ -23,10 +26,16 @@ async def extract_clips(
 ) -> dict:
     """
     Extract video clips for approved/pending segments.
-    
+
     1. Fetches segments for the job
     2. Uses ffmpeg to cut clips from the source video
     3. Saves clip paths to segment records
+
+    ffmpeg runs via async_subprocess.run_subprocess() rather than
+    subprocess.run() — this stage can take minutes for a long source
+    video with many segments, and a blocking call here would freeze
+    the whole server (SSE stream, job polling, everything) for that
+    entire duration.
     """
     # Fetch job
     result = await db.execute(select(Job).where(Job.id == job_id))
@@ -36,17 +45,21 @@ async def extract_clips(
 
     # Fetch segments
     segments_result = await db.execute(
-        select(Segment).where(
+        select(Segment)
+        .where(
             Segment.job_id == job_id,
             Segment.status.in_(["pending", "approved"]),
-        ).order_by(Segment.start_seconds)
+        )
+        .order_by(Segment.start_seconds)
     )
     segments = segments_result.scalars().all()
 
     if not segments:
         return {"passed": False, "message": "No segments to extract"}
 
-    await upsert_pipeline_step(db, job_id, "extract", "running", 10, f"Extracting {len(segments)} clips...")
+    await upsert_pipeline_step(
+        db, job_id, "extract", "running", 10, f"Extracting {len(segments)} clips..."
+    )
 
     # Locate source video
     video_path = settings.upload_path / f"{job_id}.mp4"
@@ -64,8 +77,12 @@ async def extract_clips(
         for i, segment in enumerate(segments):
             progress = 10 + int((i / len(segments)) * 80)
             await upsert_pipeline_step(
-                db, job_id, "extract", "running", progress,
-                f"Extracting clip {i + 1}/{len(segments)}..."
+                db,
+                job_id,
+                "extract",
+                "running",
+                progress,
+                f"Extracting clip {i + 1}/{len(segments)}...",
             )
 
             clip_filename = f"clip_{i + 1:03d}.mp4"
@@ -81,26 +98,48 @@ async def extract_clips(
             # Extract clip using ffmpeg
             ffmpeg_cmd = [
                 "ffmpeg",
-                "-ss", str(segment.start_seconds),
-                "-i", str(video_path),
-                "-t", str(duration),
-                "-c:v", "libx264",
-                "-c:a", "aac",
-                "-preset", "fast",
-                "-crf", "22",
+                "-ss",
+                str(segment.start_seconds),
+                "-i",
+                str(video_path),
+                "-t",
+                str(duration),
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                "-preset",
+                "fast",
+                "-crf",
+                "22",
                 "-y",
                 str(clip_path),
             ]
 
-            subprocess.run(ffmpeg_cmd, capture_output=True, timeout=120)
+            ffmpeg_result = await run_subprocess(ffmpeg_cmd, timeout=120)
 
-            if clip_path.exists():
+            if ffmpeg_result.returncode != 0:
+                stderr_tail = ffmpeg_result.stderr.decode(errors="replace")[-500:]
+                logger.warning(
+                    f"ffmpeg extract failed for segment {segment.id} (job {job_id}): {stderr_tail}"
+                )
+                continue
+
+            if clip_path.exists() and clip_path.stat().st_size > 0:
                 segment.clip_path = str(clip_path)
                 clips_rendered += 1
+            else:
+                logger.warning(
+                    f"ffmpeg reported success but produced no/empty output for segment {segment.id} (job {job_id})"
+                )
 
         await upsert_pipeline_step(
-            db, job_id, "extract", "complete", 100,
-            f"Extracted {clips_rendered}/{len(segments)} clips"
+            db,
+            job_id,
+            "extract",
+            "complete",
+            100,
+            f"Extracted {clips_rendered}/{len(segments)} clips",
         )
 
         return {
@@ -109,9 +148,13 @@ async def extract_clips(
             "clips_rendered": clips_rendered,
         }
 
-    except subprocess.TimeoutExpired:
-        await upsert_pipeline_step(db, job_id, "extract", "failed", 0, "Clip extraction timed out")
+    except SubprocessTimeoutExpired:
+        await upsert_pipeline_step(
+            db, job_id, "extract", "failed", 0, "Clip extraction timed out"
+        )
         return {"passed": False, "message": "Clip extraction timed out"}
     except Exception as e:
-        await upsert_pipeline_step(db, job_id, "extract", "failed", 0, f"Extraction failed: {str(e)}")
+        await upsert_pipeline_step(
+            db, job_id, "extract", "failed", 0, f"Extraction failed: {str(e)}"
+        )
         return {"passed": False, "message": f"Clip extraction failed: {str(e)}"}

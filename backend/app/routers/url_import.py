@@ -480,7 +480,7 @@ async def _upload_to_sia(
             from sia_storage import PinnedObject
 
             obj = PinnedObject()
-            uploaded = await sdk.upload(obj, file_data)
+            uploaded = await sdk.upload(obj, file_data, None)
             sia_object_id = uploaded.id()
 
             try:

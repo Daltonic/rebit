@@ -153,7 +153,7 @@ export default function SetupPage() {
         if (cancelled) return;
 
         if (data.setupComplete) {
-          router.push('/');
+          router.push('/login')
           return;
         }
 

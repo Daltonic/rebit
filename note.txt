@@ -1,3 +1,5 @@
+sudo apt update && sudo apt install -y ffmpeg
+
 npx inngest-cli@latest dev -u http://localhost:3000/api/inngest --no-discovery --no-poll
 
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

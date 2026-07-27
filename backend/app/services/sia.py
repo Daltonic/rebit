@@ -10,17 +10,15 @@ continue without actual Sia infrastructure.
 
 import json
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sia_storage import PinnedObject
+from sia_storage import PinnedObject, UploadOptions
 
 from app.config import settings
-from app.models import Job, Segment, Transcript, SiaLog, PipelineStep
+from app.models import Job, Segment, Transcript, SiaLog
 from app.services import sia_client
 from app.services.pipeline_steps import upsert_pipeline_step
 
@@ -49,7 +47,9 @@ async def store_job_artifacts(
     if not job:
         return {"passed": False, "message": f"Job {job_id} not found"}
 
-    await upsert_pipeline_step(db, job_id, "sia_store", "running", 10, "Starting Sia storage...")
+    await upsert_pipeline_step(
+        db, job_id, "sia_store", "running", 10, "Starting Sia storage..."
+    )
 
     try:
         # Check if Sia SDK is ready
@@ -58,7 +58,9 @@ async def store_job_artifacts(
             return await _demo_store(job_id, job, db)
 
         # Live mode — use SDK
-        await upsert_pipeline_step(db, job_id, "sia_store", "running", 30, "Uploading transcript to Sia...")
+        await upsert_pipeline_step(
+            db, job_id, "sia_store", "running", 30, "Uploading transcript to Sia..."
+        )
 
         # Step 1: Upload transcript
         transcript_result = await db.execute(
@@ -69,12 +71,32 @@ async def store_job_artifacts(
         if transcript:
             transcript_data = json.dumps(transcript.json_content).encode("utf-8")
             obj = PinnedObject()
-            uploaded = await sdk.upload(obj, transcript_data)
-            transcript.sia_object_id = uploaded.id()
-            await _add_sia_log(db, job_id, "upload_transcript", True, f"Transcript uploaded: {uploaded.id()}")
+            try:
+                uploaded = await sdk.upload(obj, transcript_data, UploadOptions())
+                transcript.sia_object_id = uploaded.id()
+                await _add_sia_log(
+                    db,
+                    job_id,
+                    "upload_transcript",
+                    True,
+                    f"Transcript uploaded: {uploaded.id()}",
+                )
+            except Exception as e:
+                # Don't let one failed artifact take down the whole stage —
+                # log it and keep going, the same way the pin loop below does.
+                logger.warning(f"Failed to upload transcript for job {job_id}: {e}")
+                await _add_sia_log(
+                    db,
+                    job_id,
+                    "upload_transcript",
+                    False,
+                    f"Transcript upload failed: {e}",
+                )
 
         # Step 2: Upload rendered clips
-        await upsert_pipeline_step(db, job_id, "sia_store", "running", 50, "Uploading clips to Sia...")
+        await upsert_pipeline_step(
+            db, job_id, "sia_store", "running", 50, "Uploading clips to Sia..."
+        )
         segments_result = await db.execute(
             select(Segment).where(
                 Segment.job_id == job_id,
@@ -88,12 +110,35 @@ async def store_job_artifacts(
             if clip_path.exists():
                 clip_data = clip_path.read_bytes()
                 obj = PinnedObject()
-                uploaded = await sdk.upload(obj, clip_data)
-                segment.sia_object_id = uploaded.id()
-                await _add_sia_log(db, job_id, "upload_clip", True, f"Clip uploaded: {uploaded.id()}")
+                try:
+                    uploaded = await sdk.upload(obj, clip_data, UploadOptions())
+                    segment.sia_object_id = uploaded.id()
+                    await _add_sia_log(
+                        db,
+                        job_id,
+                        "upload_clip",
+                        True,
+                        f"Clip uploaded: {uploaded.id()}",
+                    )
+                except Exception as e:
+                    # One bad clip (timeout, indexer hiccup, oversized file)
+                    # shouldn't sink every other clip's upload. Log and move on;
+                    # this segment just won't have a sia_object_id.
+                    logger.warning(
+                        f"Failed to upload clip {segment.id} for job {job_id}: {e}"
+                    )
+                    await _add_sia_log(
+                        db,
+                        job_id,
+                        "upload_clip",
+                        False,
+                        f"Clip {segment.id} upload failed: {e}",
+                    )
 
         # Step 3: Upload source video
-        await upsert_pipeline_step(db, job_id, "sia_store", "running", 70, "Uploading source video to Sia...")
+        await upsert_pipeline_step(
+            db, job_id, "sia_store", "running", 70, "Uploading source video to Sia..."
+        )
         video_path = settings.upload_path / f"{job_id}.mp4"
         if not video_path.exists():
             video_path = settings.upload_path / job.source_filename
@@ -101,12 +146,26 @@ async def store_job_artifacts(
         if video_path.exists():
             video_data = video_path.read_bytes()
             obj = PinnedObject()
-            uploaded = await sdk.upload(obj, video_data)
-            job.source_sia_object_id = uploaded.id()
-            await _add_sia_log(db, job_id, "upload_source", True, f"Source uploaded: {uploaded.id()}")
+            try:
+                uploaded = await sdk.upload(obj, video_data, UploadOptions())
+                job.source_sia_object_id = uploaded.id()
+                await _add_sia_log(
+                    db,
+                    job_id,
+                    "upload_source",
+                    True,
+                    f"Source uploaded: {uploaded.id()}",
+                )
+            except Exception as e:
+                logger.warning(f"Failed to upload source video for job {job_id}: {e}")
+                await _add_sia_log(
+                    db, job_id, "upload_source", False, f"Source upload failed: {e}"
+                )
 
         # Step 4: Pin all objects
-        await upsert_pipeline_step(db, job_id, "sia_store", "running", 85, "Pinning objects on Sia...")
+        await upsert_pipeline_step(
+            db, job_id, "sia_store", "running", 85, "Pinning objects on Sia..."
+        )
         all_object_ids = []
         if transcript and transcript.sia_object_id:
             all_object_ids.append(transcript.sia_object_id)
@@ -128,7 +187,9 @@ async def store_job_artifacts(
             job.sia_hash = all_object_ids[0]
             job.sia_status = "ready"
 
-        await upsert_pipeline_step(db, job_id, "sia_store", "complete", 100, "Sia storage complete")
+        await upsert_pipeline_step(
+            db, job_id, "sia_store", "complete", 100, "Sia storage complete"
+        )
 
         # NOTE: job.status = "complete" is set by the orchestrator once ALL
         # stages finish (pipeline_orchestrator.py), not here. sia_store
@@ -144,7 +205,9 @@ async def store_job_artifacts(
         }
 
     except Exception as e:
-        await upsert_pipeline_step(db, job_id, "sia_store", "failed", 0, f"Sia storage failed: {str(e)}")
+        await upsert_pipeline_step(
+            db, job_id, "sia_store", "failed", 0, f"Sia storage failed: {str(e)}"
+        )
         await _add_sia_log(db, job_id, "store", False, str(e))
         return {"passed": False, "message": f"Sia storage failed: {str(e)}"}
 
@@ -156,7 +219,9 @@ async def _demo_store(
     reason: str = "Sia not connected — demo mode",
 ) -> dict:
     """Store artifacts with demo (fake) Sia hashes."""
-    await upsert_pipeline_step(db, job_id, "sia_store", "running", 50, f"Demo mode: {reason}")
+    await upsert_pipeline_step(
+        db, job_id, "sia_store", "running", 50, f"Demo mode: {reason}"
+    )
 
     # Create demo hashes
     demo_hash = f"{DEMO_PREFIX}{job_id}"
@@ -173,15 +238,17 @@ async def _demo_store(
         transcript.sia_object_id = f"{DEMO_PREFIX}transcript-{job_id}"
 
     # Update segments
-    segments_result = await db.execute(
-        select(Segment).where(Segment.job_id == job_id)
-    )
+    segments_result = await db.execute(select(Segment).where(Segment.job_id == job_id))
     for segment in segments_result.scalars().all():
         segment.sia_object_id = f"{DEMO_PREFIX}clip-{segment.id}"
 
-    await _add_sia_log(db, job_id, "demo_store", True, f"Demo storage complete: {demo_hash}")
+    await _add_sia_log(
+        db, job_id, "demo_store", True, f"Demo storage complete: {demo_hash}"
+    )
 
-    await upsert_pipeline_step(db, job_id, "sia_store", "complete", 100, "Demo storage complete")
+    await upsert_pipeline_step(
+        db, job_id, "sia_store", "complete", 100, "Demo storage complete"
+    )
 
     return {
         "passed": True,
@@ -199,9 +266,11 @@ async def _add_sia_log(
     message: str,
 ):
     """Add a Sia log entry."""
-    db.add(SiaLog(
-        job_id=job_id,
-        step=step,
-        passed=passed,
-        message=message,
-    ))
+    db.add(
+        SiaLog(
+            job_id=job_id,
+            step=step,
+            passed=passed,
+            message=message,
+        )
+    )

@@ -5,7 +5,6 @@ import ClipCard from '@/components/ClipCard';
 import { ArrowLeft, Download, Loader2 } from 'lucide-react';
 import { Segment, SegmentStatus } from '@/lib/types';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
 type SortBy = 'virality' | 'time';
 
@@ -30,7 +29,7 @@ export default function ClipsPage({ params }: { params: Promise<{ id: string }> 
     const fetchJob = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`${BACKEND_URL}/api/jobs/${id}`);
+        const res = await fetch(`/api/jobs/${id}`);
         if (!res.ok) {
           if (res.status === 404) {
             setError('Job not found');
@@ -58,7 +57,7 @@ export default function ClipsPage({ params }: { params: Promise<{ id: string }> 
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${BACKEND_URL}/api/jobs/${id}`);
+        const res = await fetch(`/api/jobs/${id}`);
         if (res.ok) {
           const data: JobData = await res.json();
           setJobData(data);
@@ -189,7 +188,13 @@ export default function ClipsPage({ params }: { params: Promise<{ id: string }> 
       ) : (
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filtered.map(seg => (
-            <ClipCard key={seg.id} segment={seg} onApprove={handleApprove} onReject={handleReject} />
+            <ClipCard
+              key={seg.id}
+              segment={seg}
+              sourceUrl={`/api/jobs/${id}/clips/${seg.id}`}
+              onApprove={handleApprove}
+              onReject={handleReject}
+            />
           ))}
         </div>
       )}

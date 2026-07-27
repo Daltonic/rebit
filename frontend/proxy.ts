@@ -3,44 +3,44 @@ import type { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth/auth';
 import { prisma } from '@/lib/prisma/client';
 
-// ── Setup Status Cache ──────────────────────────────────────────────────
-// The setup status only changes during the initial setup flow, so we cache
-// it aggressively to avoid hammering the API on every single request.
-let cachedSetupComplete: boolean | null = null;
-let cacheTimestamp = 0;
-const CACHE_TTL_MS = 10_000; // 10 seconds
+// ── Setup Status Check ──────────────────────────────────────────────────
+// We query the database directly on every request rather than caching,
+// because the middleware and API route handlers run in separate module
+// instances in Next.js. A module-level cache in the middleware would not
+// be invalidated when route handlers call invalidateSetupCache(),
+// causing stale reads that redirect users back to /setup even after
+// completing the wizard. This is a single indexed lookup by primary key,
+// so there is no meaningful performance penalty.
 
-async function checkSetupComplete(baseUrl: string): Promise<boolean> {
-  const now = Date.now();
-
-  // Return cached value if still fresh
-  if (cachedSetupComplete !== null && now - cacheTimestamp < CACHE_TTL_MS) {
-    return cachedSetupComplete;
-  }
-
+async function checkSetupComplete(): Promise<boolean> {
   try {
-    const res = await fetch(`${baseUrl}/api/setup/status`, {
-      signal: AbortSignal.timeout(5000),
+    // Query the database directly instead of fetching our own
+    // /api/setup/status endpoint over HTTP. The middleware already
+    // imports `prisma` (see above), which only works because this
+    // runs in a Node.js-capable runtime — so there's no need to go
+    // back out over the network to ask ourselves this question.
+    // That self-fetch used to go through the public origin, which
+    // breaks in GitHub Codespaces, behind reverse proxies, or on any
+    // password-protected preview deployment, because a server-to-
+    // server request has none of the browser's session/auth context.
+    // A direct query has no such dependency and no port to guess at.
+    const settings = await prisma.appSettings.findUnique({
+      where: { id: 'default' },
+      select: { setupComplete: true },
     });
 
-    if (res.ok) {
-      const data = await res.json();
-      cachedSetupComplete = !!data.setupComplete;
-    } else {
-      cachedSetupComplete = false;
-    }
+    return !!settings?.setupComplete;
   } catch {
-    cachedSetupComplete = false;
+    // Table/DB not reachable yet (e.g. before first migration) — treat
+    // as not set up.
+    return false;
   }
-
-  cacheTimestamp = now;
-  return cachedSetupComplete;
 }
 
-// Invalidate the cache (called externally when setup status changes)
+// No-op — kept for backward compatibility with route handlers that import it.
+// The middleware no longer caches, so invalidation is unnecessary.
 export function invalidateSetupCache() {
-  cachedSetupComplete = null;
-  cacheTimestamp = 0;
+  // no-op
 }
 
 /**
@@ -72,7 +72,7 @@ export default async function proxy(
 
   // ── Setup check (skip for setup page and setup API) ───────────────
   if (pathname !== '/setup' && !pathname.startsWith('/api/setup')) {
-    const setupComplete = await checkSetupComplete(request.nextUrl.origin);
+    const setupComplete = await checkSetupComplete();
     if (!setupComplete) {
       return NextResponse.redirect(new URL('/setup', request.url));
     }

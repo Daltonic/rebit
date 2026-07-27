@@ -4,7 +4,6 @@ Transcribes video/audio to text with word-level timestamps.
 """
 
 import json
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -16,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Job, Transcript, PipelineStep
 from app.services.pipeline_steps import upsert_pipeline_step
+from app.services.async_subprocess import run_subprocess, SubprocessTimeoutExpired
 
 
 async def transcribe_job(
@@ -24,12 +24,19 @@ async def transcribe_job(
 ) -> dict:
     """
     Transcribe a video file associated with a job.
-    
+
     1. Fetches the job from DB
     2. Locates the uploaded video file
     3. Runs Whisper transcription
     4. Saves transcript to DB (VTT + JSON)
     5. Updates job duration
+
+    Both the ffmpeg audio-extraction step and the whisper CLI run via
+    async_subprocess.run_subprocess() instead of subprocess.run(). This
+    is the single longest-running stage in the pipeline (whisper alone
+    has a 10-minute timeout below) — a blocking call here is the main
+    reason the job page used to sit frozen on a spinner: the event loop
+    couldn't respond to status polling or SSE while whisper was running.
     """
     # Fetch job
     result = await db.execute(select(Job).where(Job.id == job_id))
@@ -37,7 +44,9 @@ async def transcribe_job(
     if not job:
         return {"passed": False, "message": f"Job {job_id} not found"}
 
-    await upsert_pipeline_step(db, job_id, "transcribe", "running", 10, "Starting transcription...")
+    await upsert_pipeline_step(
+        db, job_id, "transcribe", "running", 10, "Starting transcription..."
+    )
 
     # Locate video file
     video_path = settings.upload_path / f"{job_id}.mp4"
@@ -47,42 +56,69 @@ async def transcribe_job(
         return {"passed": False, "message": f"Video file not found for job {job_id}"}
 
     try:
-        await upsert_pipeline_step(db, job_id, "transcribe", "running", 30, "Extracting audio...")
+        await upsert_pipeline_step(
+            db, job_id, "transcribe", "running", 30, "Extracting audio..."
+        )
 
         # Extract audio using ffmpeg
         audio_path = settings.output_path / f"{job_id}_audio.wav"
         audio_path.parent.mkdir(parents=True, exist_ok=True)
 
         ffmpeg_cmd = [
-            "ffmpeg", "-i", str(video_path),
-            "-vn", "-acodec", "pcm_s16le",
-            "-ar", "16000", "-ac", "1",
-            "-y", str(audio_path),
+            "ffmpeg",
+            "-i",
+            str(video_path),
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-y",
+            str(audio_path),
         ]
-        subprocess.run(ffmpeg_cmd, capture_output=True, timeout=300)
+        await run_subprocess(ffmpeg_cmd, timeout=300)
 
-        await upsert_pipeline_step(db, job_id, "transcribe", "running", 50, "Running Whisper transcription...")
+        await upsert_pipeline_step(
+            db, job_id, "transcribe", "running", 50, "Running Whisper transcription..."
+        )
 
         # Run Whisper via command line (falls back to OpenAI Whisper if installed)
         vtt_path = settings.output_path / f"{job_id}_audio.vtt"
         json_path = settings.output_path / f"{job_id}_audio.json"
 
         whisper_cmd = [
-            "whisper", str(audio_path),
-            "--model", settings.whisper_model,
-            "--output_dir", str(settings.output_path),
-            "--output_format", "vtt",
-            "--language", "en",
-            "--device", settings.whisper_device,
+            "whisper",
+            str(audio_path),
+            "--model",
+            settings.whisper_model,
+            "--output_dir",
+            str(settings.output_path),
+            "--output_format",
+            "vtt",
+            "--language",
+            "en",
+            "--device",
+            settings.whisper_device,
         ]
-        result_whisper = subprocess.run(whisper_cmd, capture_output=True, timeout=600)
+        result_whisper = await run_subprocess(whisper_cmd, timeout=600)
 
         if result_whisper.returncode != 0:
-            # Fallback: try using whisper via python module
+            # Fallback: try using whisper via python module.
+            # model.transcribe() is CPU/GPU-bound synchronous work, same
+            # problem as subprocess.run() — it would block the event
+            # loop for the whole transcription, so it's offloaded to a
+            # worker thread instead of awaited directly.
             try:
+                import asyncio
                 import whisper as whisper_lib
-                model = whisper_lib.load_model(settings.whisper_model)
-                transcribe_result = model.transcribe(str(audio_path))
+
+                def _run_whisper_module():
+                    model = whisper_lib.load_model(settings.whisper_model)
+                    return model.transcribe(str(audio_path))
+
+                transcribe_result = await asyncio.to_thread(_run_whisper_module)
 
                 # Generate VTT
                 vtt_lines = ["WEBVTT", ""]
@@ -102,7 +138,9 @@ async def transcribe_job(
 
             except ImportError:
                 # Generate mock transcript for demo/testing
-                vtt_content, json_content, word_count, duration_seconds = _generate_mock_transcript(job_id)
+                vtt_content, json_content, word_count, duration_seconds = (
+                    _generate_mock_transcript(job_id)
+                )
         else:
             # Read VTT output
             if vtt_path.exists():
@@ -119,21 +157,27 @@ async def transcribe_job(
             word_count = len(vtt_content.split())
             duration_seconds = _estimate_duration(vtt_content)
 
-        await upsert_pipeline_step(db, job_id, "transcribe", "running", 80, "Saving transcript...")
+        await upsert_pipeline_step(
+            db, job_id, "transcribe", "running", 80, "Saving transcript..."
+        )
 
         # Save transcript to DB
-        existing = await db.execute(select(Transcript).where(Transcript.job_id == job_id))
+        existing = await db.execute(
+            select(Transcript).where(Transcript.job_id == job_id)
+        )
         existing_transcript = existing.scalar_one_or_none()
 
         if existing_transcript:
             existing_transcript.vtt_content = vtt_content
             existing_transcript.json_content = json_content
         else:
-            db.add(Transcript(
-                job_id=job_id,
-                vtt_content=vtt_content,
-                json_content=json_content,
-            ))
+            db.add(
+                Transcript(
+                    job_id=job_id,
+                    vtt_content=vtt_content,
+                    json_content=json_content,
+                )
+            )
 
         # Update job duration
         if duration_seconds:
@@ -141,7 +185,9 @@ async def transcribe_job(
 
         await db.flush()
 
-        await upsert_pipeline_step(db, job_id, "transcribe", "complete", 100, "Transcription complete")
+        await upsert_pipeline_step(
+            db, job_id, "transcribe", "complete", 100, "Transcription complete"
+        )
 
         # NOTE: job.status is no longer set here. The orchestrator is the
         # single place that maps a running stage to job.status (see
@@ -156,11 +202,15 @@ async def transcribe_job(
             "word_count": word_count,
         }
 
-    except subprocess.TimeoutExpired:
-        await upsert_pipeline_step(db, job_id, "transcribe", "failed", 0, "Transcription timed out")
+    except SubprocessTimeoutExpired:
+        await upsert_pipeline_step(
+            db, job_id, "transcribe", "failed", 0, "Transcription timed out"
+        )
         return {"passed": False, "message": "Transcription timed out after 10 minutes"}
     except Exception as e:
-        await upsert_pipeline_step(db, job_id, "transcribe", "failed", 0, f"Transcription failed: {str(e)}")
+        await upsert_pipeline_step(
+            db, job_id, "transcribe", "failed", 0, f"Transcription failed: {str(e)}"
+        )
         return {"passed": False, "message": f"Transcription failed: {str(e)}"}
 
 
@@ -175,6 +225,7 @@ def _format_vtt_time(seconds: float) -> str:
 def _estimate_duration(vtt_content: str) -> int:
     """Estimate video duration from VTT timestamps."""
     import re
+
     times = re.findall(r"(\d{2}:\d{2}:\d{2}\.\d{3})", vtt_content)
     if not times:
         return 0
@@ -208,11 +259,13 @@ def _parse_vtt_segments(vtt_content: str) -> list[dict]:
 
                 text = " ".join(text_lines)
                 if text:
-                    segments.append({
-                        "start": start,
-                        "end": end,
-                        "text": text,
-                    })
+                    segments.append(
+                        {
+                            "start": start,
+                            "end": end,
+                            "text": text,
+                        }
+                    )
         i += 1
 
     return segments
@@ -269,16 +322,56 @@ Thank you for watching! Get started today and transform your long-form content.
     json_data = {
         "text": "Welcome to this video tutorial...",
         "segments": [
-            {"start": 0.0, "end": 5.0, "text": "Welcome to this video tutorial on getting started with the platform."},
-            {"start": 5.0, "end": 12.0, "text": "Today we're going to cover the basics of how to upload your first video and create engaging clips."},
-            {"start": 12.0, "end": 18.5, "text": "The first thing you need to do is navigate to the upload page and select your video file."},
-            {"start": 18.5, "end": 25.0, "text": "Once uploaded, our AI system will automatically transcribe and analyze your content."},
-            {"start": 25.0, "end": 32.0, "text": "It looks for the most engaging moments, the parts that will really grab your audience's attention."},
-            {"start": 38.0, "end": 45.0, "text": "You have full control over which clips to keep and which to discard."},
-            {"start": 45.0, "end": 52.0, "text": "After selecting your preferred clips, the system renders them as vertical short-form videos."},
-            {"start": 52.0, "end": 58.0, "text": "Finally, everything is stored securely on the Sia decentralized network."},
-            {"start": 58.0, "end": 65.0, "text": "This ensures your content remains accessible and tamper-proof at all times."},
-            {"start": 65.0, "end": 70.0, "text": "Thank you for watching! Get started today and transform your long-form content."},
+            {
+                "start": 0.0,
+                "end": 5.0,
+                "text": "Welcome to this video tutorial on getting started with the platform.",
+            },
+            {
+                "start": 5.0,
+                "end": 12.0,
+                "text": "Today we're going to cover the basics of how to upload your first video and create engaging clips.",
+            },
+            {
+                "start": 12.0,
+                "end": 18.5,
+                "text": "The first thing you need to do is navigate to the upload page and select your video file.",
+            },
+            {
+                "start": 18.5,
+                "end": 25.0,
+                "text": "Once uploaded, our AI system will automatically transcribe and analyze your content.",
+            },
+            {
+                "start": 25.0,
+                "end": 32.0,
+                "text": "It looks for the most engaging moments, the parts that will really grab your audience's attention.",
+            },
+            {
+                "start": 38.0,
+                "end": 45.0,
+                "text": "You have full control over which clips to keep and which to discard.",
+            },
+            {
+                "start": 45.0,
+                "end": 52.0,
+                "text": "After selecting your preferred clips, the system renders them as vertical short-form videos.",
+            },
+            {
+                "start": 52.0,
+                "end": 58.0,
+                "text": "Finally, everything is stored securely on the Sia decentralized network.",
+            },
+            {
+                "start": 58.0,
+                "end": 65.0,
+                "text": "This ensures your content remains accessible and tamper-proof at all times.",
+            },
+            {
+                "start": 65.0,
+                "end": 70.0,
+                "text": "Thank you for watching! Get started today and transform your long-form content.",
+            },
         ],
         "duration": 70.0,
     }
