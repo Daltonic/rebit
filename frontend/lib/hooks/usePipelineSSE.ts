@@ -1,9 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
-import { PipelineStep } from '@/lib/types';
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
 export interface SSEEvent {
   type: 'connected' | 'step_update' | 'job_status' | 'pipeline_complete' | 'keepalive';
@@ -48,7 +45,7 @@ export function usePipelineSSE({
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 5;
 
-  const connect = useCallback(() => {
+  const connect = useCallback(function connect() {
     if (!jobId || !enabled) return;
 
     // Clean up any existing connection
@@ -57,7 +54,7 @@ export function usePipelineSSE({
       eventSourceRef.current = null;
     }
 
-    const url = `${BACKEND_URL}/api/jobs/${jobId}/events`;
+    const url = `/api/jobs/${jobId}/events`;
     const es = new EventSource(url);
     eventSourceRef.current = es;
 
