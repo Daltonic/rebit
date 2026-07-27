@@ -15,6 +15,7 @@ Architecture:
 """
 
 import asyncio
+import io
 import logging
 from pathlib import Path
 from typing import Optional
@@ -26,7 +27,10 @@ from sia_storage import (
     AppKey,
     AppMetadata,
     Builder,
+    BytesReader,
+    PinnedObject,
     SDK,
+    UploadOptions,
     generate_recovery_phrase,
     uniffi_set_event_loop,
     validate_recovery_phrase,
@@ -58,8 +62,81 @@ _sdk_lock = asyncio.Lock()
 _registration_builder: Optional[Builder] = None
 _registration_phrase: Optional[str] = None
 
+# ── Shared upload constants/helpers ─────────────────────────────────────
+# Single source of truth for what a "fake" object ID looks like, so
+# sia_upload.py and sia.py can never disagree with each other about it.
+DEMO_PREFIX = "demo-sia-"
+
+# Timeouts for individual Sia SDK calls. The per-stage timeout in
+# pipeline_orchestrator.py only kills the stage as a whole; without a
+# timeout on the individual upload/pin call inside it, one hung network
+# call still eats the entire stage budget instead of failing fast.
+SIA_UPLOAD_TIMEOUT = 300  # 5 minutes per object upload
+SIA_PIN_TIMEOUT = 120  # 2 minutes per pin operation
+
+
+def is_real_object_id(object_id: Optional[str]) -> bool:
+    """True if object_id is a genuine 64-char hex Sia object ID.
+
+    Anything else — None, empty, or one of our own "demo-sia-..."
+    placeholders — must never be handed to sdk.object() / sdk.pin_object()
+    on a live SDK. That's what produced "hex error: Unexpected length":
+    a demo hash from a failed earlier stage got passed to the live pin
+    call in a later stage.
+    """
+    if not object_id or object_id.startswith(DEMO_PREFIX):
+        return False
+    if len(object_id) != 64:
+        return False
+    try:
+        bytes.fromhex(object_id)
+        return True
+    except ValueError:
+        return False
+
+
+async def upload_bytes(sdk: SDK, obj: PinnedObject, data: bytes) -> PinnedObject:
+    """Upload raw bytes to Sia, whichever `sdk.upload()` this deployment resolves to.
+
+    The `sia_storage` SDK's documented `Sdk.upload()` wrapper accepts plain
+    bytes/BinaryIO directly and converts it to a Reader internally — but in
+    production every single upload call was throwing "Expected Reader
+    subclass, bytes found", which is the exact TypeError the bare FFI
+    binding raises when handed raw bytes directly. That means this
+    deployment's `sdk.upload()` isn't doing that auto-conversion. Try the
+    documented approach first; if that specific error still surfaces, fall
+    back to handing it an explicit Reader so the upload succeeds either way.
+    """
+    try:
+        return await asyncio.wait_for(
+            sdk.upload(obj, io.BytesIO(data), UploadOptions()),
+            timeout=SIA_UPLOAD_TIMEOUT,
+        )
+    except TypeError as e:
+        if "Reader subclass" not in str(e):
+            raise
+        return await asyncio.wait_for(
+            sdk.upload(obj, BytesReader(io.BytesIO(data)), UploadOptions()),
+            timeout=SIA_UPLOAD_TIMEOUT,
+        )
+
+
+async def pin_object_by_id(sdk: SDK, object_id: str) -> None:
+    """Look up and pin an object by ID, with a timeout, skipping fake IDs.
+
+    Silently no-ops on anything that doesn't look like a real object ID
+    instead of handing it to the live SDK and getting back a confusing
+    "hex error: Unexpected length".
+    """
+    if not is_real_object_id(object_id):
+        logger.warning(f"Skipping pin for non-live object id: {object_id}")
+        return
+    pinned = await asyncio.wait_for(sdk.object(object_id), timeout=SIA_PIN_TIMEOUT)
+    await asyncio.wait_for(sdk.pin_object(pinned), timeout=SIA_PIN_TIMEOUT)
+
 
 # ── Public API ───────────────────────────────────────────────────────────
+
 
 async def get_sdk() -> Optional[SDK]:
     """Get the initialized SDK instance, or None if not connected."""
@@ -75,7 +152,7 @@ async def init_sia_client(
 ) -> dict:
     """
     Initialize the Sia client.
-    
+
     1. Try loading a stored AppKey from disk
     2. If valid → SDK.connected(key) → connected
     3. If no key → demo mode
@@ -100,10 +177,10 @@ async def init_sia_client(
                 try:
                     app_id_bytes = bytes.fromhex(app_id_hex)
                 except ValueError:
-                    app_id_bytes = b'\x00' * 32
+                    app_id_bytes = b"\x00" * 32
 
                 if len(app_id_bytes) != 32:
-                    app_id_bytes = b'\x00' * 32
+                    app_id_bytes = b"\x00" * 32
 
                 metadata = AppMetadata(
                     id=app_id_bytes,
@@ -130,9 +207,7 @@ async def init_sia_client(
 
         # No valid stored key → demo mode
         _demo_mode = True
-        _demo_reason = (
-            "Sia not configured — use the setup wizard to connect"
-        )
+        _demo_reason = "Sia not configured — use the setup wizard to connect"
         _sdk = None
         return {"connected": False, "demo": True, "reason": _demo_reason}
 
@@ -160,7 +235,11 @@ async def init_sia_from_db(db: AsyncSession) -> dict:
         _set_demo_mode("Database not initialized yet")
         return {"connected": False, "demo": True, "reason": "Database not initialized"}
 
-    if not app_settings or not app_settings.sia_indexer_url or not app_settings.sia_app_id:
+    if (
+        not app_settings
+        or not app_settings.sia_indexer_url
+        or not app_settings.sia_app_id
+    ):
         logger.info("No Sia config in database — entering demo mode")
         _set_demo_mode("Sia not configured — use the setup wizard")
         return {"connected": False, "demo": True, "reason": "Sia not configured"}
@@ -212,7 +291,10 @@ async def registration_start(
     try:
         app_id_bytes = bytes.fromhex(app_id_hex)
     except ValueError:
-        return {"ok": False, "error": "App ID must be a 64-character hex string (32 bytes)"}
+        return {
+            "ok": False,
+            "error": "App ID must be a 64-character hex string (32 bytes)",
+        }
 
     if len(app_id_bytes) != 32:
         return {"ok": False, "error": "App ID must be exactly 32 bytes (64 hex chars)"}
@@ -341,6 +423,7 @@ def is_ready() -> bool:
 
 
 # ── Internal Helpers ─────────────────────────────────────────────────────
+
 
 def _set_demo_mode(reason: str):
     """Set demo mode with a reason."""
