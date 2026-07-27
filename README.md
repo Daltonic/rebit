@@ -1,26 +1,27 @@
 # Rebit
 
-ReBit is a decentralized video clipping engine that transforms long-form videos into captivating short-form vertical clips while ensuring full self-hosting capabilities with storage solutions powered by Sia. Upload a video file or paste a URL, and watch it move through a 5-stage automated processing pipeline that transcribes, detects highlights, extracts clips, renders them as vertical 9:16 videos, and stores everything on the Sia Network.
+ReBit is a decentralized video clipping engine that transforms long-form videos into captivating short-form vertical clips while ensuring full self-hosting capabilities with storage solutions powered by Sia. Upload a video file or paste a direct media URL, and watch it move through a 6-stage automated processing pipeline that uploads to Sia, transcribes, detects highlights, extracts clips, renders them as vertical 9:16 videos, and stores everything on the Sia Network.
 
 ```
-Upload → Transcribe → Detect → Extract → Render → Sia Storage
+Upload → Sia Upload → Transcribe → Detect → Extract → Render → Sia Storage
 ```
 
-Every stage is a durable Inngest function that survives crashes and restarts. Failed stages report exactly what to fix.
+Every stage is an async Python function with per-stage timeouts, progress reporting via SSE, and a per-job lock that prevents concurrent execution. Failed stages report exactly what to fix.
 
 ---
 
 ## What it does
 
-Upload a video file or paste a URL and watch it move through 5 automated processing stages. Each stage updates the pipeline in real-time, and all artifacts are stored permanently on the Sia Network.
+Upload a video file or paste a direct media URL and watch it move through 6 automated processing stages. Each stage updates the pipeline in real-time via Server-Sent Events (SSE), and all artifacts are stored permanently on the Sia Network.
 
-- **File Upload**: Drag-and-drop or file picker for MP4, MOV, WebM, MKV (up to 5 GB)
-- **URL Import**: Import videos from YouTube, Vimeo, TikTok, Twitter/X, and more
-- **Transcription**: Speech-to-text via Whisper
-- **Highlight Detection**: Heuristic analysis to find engaging moments based on hook strength, virality scoring, and emotional signals
+- **File Upload**: Drag-and-drop or file picker for MP4, MOV, WebM, MKV, AVI, FLV, OGV (up to 500 MB)
+- **URL Import**: Import videos from direct media URLs (links ending in .mp4, .webm, .mov, etc.)
+- **Sia Upload**: Source video uploaded to Sia Network as the first pipeline step
+- **Transcription**: Speech-to-text via Whisper (local, no external API)
+- **Highlight Detection**: Multi-strategy heuristic analysis (keyword, position, emotional signals) with optional OpenRouter LLM enhancement
 - **Clip Extraction**: FFmpeg-based video segment extraction
-- **Vertical Render**: 9:16 format conversion for short-form platforms
-- **Sia Storage**: All artifacts stored on Sia decentralized network
+- **Vertical Render**: 9:16 format conversion with OpenCV face detection and saliency-based subject tracking
+- **Sia Storage**: All artifacts (transcripts, clips, source video) stored on Sia decentralized network
 
 ---
 
@@ -28,11 +29,12 @@ Upload a video file or paste a URL and watch it move through 5 automated process
 
 | # | Stage | What it does |
 |---|-------|-------------|
+| 0 | Sia Upload | Uploads the source video to the Sia Network for immutable storage |
 | 1 | Transcription | Extracts audio and runs Whisper speech-to-text, generating VTT and JSON transcripts |
-| 2 | Highlight Detection | Analyzes transcript for hook strength, virality score, and emotional signals using heuristic analysis; creates Segment records |
+| 2 | Highlight Detection | Analyzes transcript for hook strength, virality score, and emotional signals using heuristic analysis + optional LLM enhancement; creates Segment records |
 | 3 | Clip Extraction | Uses FFmpeg to cut video segments based on detected highlights |
-| 4 | Vertical Render | Converts clips to 9:16 aspect ratio for TikTok, Instagram Reels, YouTube Shorts |
-| 5 | Sia Storage | Uploads all artifacts (source video, transcript, clips) to Sia Network for immutable storage |
+| 4 | Vertical Render | Converts clips to 9:16 aspect ratio with smart subject tracking (face detection → saliency → center crop) |
+| 5 | Sia Storage | Uploads all artifacts (transcript, clips, source video) to Sia Network |
 
 ---
 
@@ -40,15 +42,18 @@ Upload a video file or paste a URL and watch it move through 5 automated process
 
 | Layer | Tech |
 |-------|------|
-| Frontend | Next.js 16, TypeScript, TailwindCSS, NextAuth.js |
-| Backend | Python (FastAPI), SQLAlchemy, PostgreSQL |
-| Event Pipeline | Inngest (durable functions) |
-| Transcription | Whisper (local) |
-| Highlight Analysis | Multi-strategy heuristic engine (keyword, position, emotional signals) |
-| Video Processing | FFmpeg |
-| Storage | Sia Network via `sia-storage` SDK |
-| ORM | Prisma (frontend-owned schema) |
-| Auth | NextAuth.js with Passkey (WebAuthn) support |
+| Frontend | Next.js 16, TypeScript, TailwindCSS v4, NextAuth.js v5 |
+| Backend | Python (FastAPI), SQLAlchemy (async), PostgreSQL |
+| Pipeline Orchestration | Async Python (asyncio.create_task) with per-job lock |
+| Event Bus | Inngest (optional event-driven triggers) |
+| Transcription | Whisper (local, via CLI or Python module) |
+| Highlight Analysis | Multi-strategy heuristic engine + optional OpenRouter LLM (GPT-4o-mini) |
+| Video Processing | FFmpeg (async subprocess) |
+| Subject Tracking | OpenCV (face detection via Haar cascade + saliency detection) |
+| Storage | Sia Network via `sia-storage` SDK v0.8.0 |
+| ORM | Prisma (frontend-owned schema) + SQLAlchemy (backend mirror) |
+| Auth | NextAuth.js with Passkey (WebAuthn), Google OAuth, GitHub OAuth |
+| Real-time Updates | Server-Sent Events (SSE) via asyncio event queues |
 
 ---
 
@@ -64,14 +69,15 @@ docker compose up --build
 |---------|-----|-------------|
 | Frontend | http://localhost:3000 | Next.js dashboard |
 | Backend | http://localhost:8000 | FastAPI pipeline executor |
-| Inngest | http://localhost:8288 | Event-driven pipeline UI |
+| Inngest | http://localhost:8288 | Event-driven pipeline UI (optional) |
 | PostgreSQL | localhost:5432 | Database |
 
-**No environment variables needed.** All configuration is handled through the browser-based Setup Wizard on first boot. Open http://localhost:3000 and complete the 3-step wizard:
+**No environment variables needed.** All configuration is handled through the browser-based Setup Wizard on first boot. Open http://localhost:3000 and complete the 4-step wizard:
 
 1. **Sia Storage** — Configure your Sia indexer URL, App ID, and BIP-39 recovery phrase, then approve the connection via the generated approval URL.
-2. **Authentication Providers** — Optionally configure Google/GitHub OAuth and WebAuthn passkey settings.
-3. **Sign Up** — Create your account. The first user to sign up becomes the **super admin**.
+2. **OpenRouter** — Optionally configure an OpenRouter API key for LLM-enhanced highlight detection.
+3. **Authentication Providers** — Optionally configure Google/GitHub OAuth and WebAuthn passkey settings.
+4. **Sign Up** — Create your account using a passkey (Touch ID, Face ID, security key).
 
 Steps are persisted to the database — you can close and resume later. After completing the wizard you'll be redirected to the login page.
 
@@ -83,16 +89,13 @@ When the backend boots it eagerly initialises the Sia client. If Sia is unreacha
 
 #### 1. Environment variables
 
-Create your local env files:
+Only `DATABASE_URL` is required as an environment variable. All other configuration (auth secret, OAuth credentials, backend URL, etc.) can be configured through the setup wizard and stored in the database.
 
 ```bash
-# Frontend — only the database URL is required (everything else has defaults)
+# Frontend — only the database URL is required
 cat > frontend/.env << 'ENV'
 DATABASE_URL=postgresql://rebit:rebit@localhost:5432/rebit
-AUTH_URL=http://localhost:3000
-BACKEND_URL=http://localhost:8000
-SIA_MODE=auto
-SIA_KEY_PATH=/tmp/sia/appkey.hex
+INNGEST_DEV=1
 ENV
 
 # Backend — use the example as-is (or tweak ports)
@@ -105,11 +108,10 @@ WHISPER_MODEL="base"
 WHISPER_DEVICE="cpu"
 UPLOAD_DIR="data/uploads"
 OUTPUT_DIR="data/output"
+MAX_UPLOAD_SIZE_MB=500
 DEBUG=false
 ENV
 ```
-
-That's it. The frontend `.env` above is the complete set of variables needed for local development. The backend `.env.example` contains defaults for the remaining backend-specific variables — adjust as needed.
 
 #### 2. Install system dependencies
 
@@ -133,7 +135,7 @@ sudo pacman -S ffmpeg
 
 #### 3. Start services individually
 
-> **Prerequisite:** Dev mode requires **PostgreSQL** already running on your machine. Make sure it is up before starting the application servers. If you don't have it running yet, start it first:
+> **Prerequisite:** Dev mode requires **PostgreSQL** already running on your machine. Make sure it is up before starting the application servers.
 
 ```bash
 # Terminal 1 — PostgreSQL
@@ -148,7 +150,7 @@ docker run -d --name rebit_pg \
 Once PostgreSQL is confirmed running, start the remaining services in separate terminals:
 
 ```bash
-# Terminal 2 — Inngest
+# Terminal 2 — Inngest (optional, for event-driven pipeline)
 npx inngest-cli@latest dev \
   -u http://localhost:3000/api/inngest \
   --no-discovery --no-poll --persist
@@ -162,6 +164,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 # Terminal 4 — Frontend
 cd frontend
 npm install
+npx prisma generate
 npm run dev
 ```
 
@@ -171,7 +174,7 @@ npm run dev
 | Backend | http://localhost:8000 |
 | Inngest | http://localhost:8288 |
 
-**First boot:** Open http://localhost:3000 and complete the **Setup Wizard** (Sia → Providers → Sign Up). See the Docker section above for details on each step.
+**First boot:** Open http://localhost:3000 and complete the **Setup Wizard** (Sia → OpenRouter → Providers → Sign Up). See the Docker section above for details on each step.
 
 #### 4. Setup wizard (environment variables it saves)
 
@@ -181,10 +184,11 @@ The wizard persists configuration into the database via these API endpoints:
 |------|----------|---------------|
 | Sia | `POST /api/setup/sia` | Indexer URL, App ID, App Name, App Description, recovery phrase |
 | Sia check | `POST /api/setup/sia/check` | Polls for approval completion |
+| OpenRouter | `POST /api/setup/openrouter` | OpenRouter API key |
 | Providers | `POST /api/setup/providers` | OAuth client IDs/secrets, WebAuthn RP ID & Origin |
-| Complete | `POST /api/setup/complete` | Marks setup as complete |
+| Complete | `POST /api/setup/complete` | Marks setup as complete, generates auth secret, stores backend URL |
 
-All values are stored in the `AppSettings` database table and read back on subsequent visits.
+All values are stored in the `AppSettings` database table and read back on subsequent visits. The auth secret and backend URL are also stored in the database, so only `DATABASE_URL` is needed as an environment variable.
 
 ---
 
@@ -215,7 +219,7 @@ If you skip the wizard or Sia is unreachable, the platform runs in **demo mode**
 
 ```
 rebit/
-├── docker-compose.yml            # 4-service orchestration
+├── docker-compose.yml            # 4-service orchestration (postgres, inngest, backend, frontend)
 ├── README.md
 ├── note.txt
 ├── docs/                         # Additional documentation
@@ -224,30 +228,34 @@ rebit/
 │   ├── requirements.txt
 │   ├── .env.example
 │   ├── app/
-│   │   ├── main.py               # FastAPI server with lifespan Sia init
+│   │   ├── main.py               # FastAPI server with lifespan Sia init + SSE endpoint
 │   │   ├── config.py             # Pydantic settings (env-based)
-│   │   ├── database.py           # Async SQLAlchemy session
-│   │   ├── models.py             # SQLAlchemy ORM models
+│   │   ├── database.py           # Async SQLAlchemy engine + session factory + migrations
+│   │   ├── models.py             # SQLAlchemy ORM models (mirrors Prisma schema)
 │   │   ├── schemas.py            # Pydantic request/response models
 │   │   ├── routers/
-│   │   │   ├── pipeline.py       # Pipeline stage endpoints
-│   │   │   ├── sia.py            # Sia connection status
+│   │   │   ├── pipeline.py       # Pipeline stage endpoints (transcribe, detect, extract, render, sia)
+│   │   │   ├── sia.py            # Sia connection status + registration flow
 │   │   │   ├── upload.py         # File upload endpoint
-│   │   │   ├── url_import.py     # URL import endpoint
-│   │   │   └── jobs.py           # Job management endpoints
+│   │   │   ├── url_import.py     # Direct media URL import endpoint
+│   │   │   ├── jobs.py           # Job management endpoints (list, get, delete, pipeline status)
+│   │   │   └── clips.py          # Clip serving (Sia + local filesystem with HTTP Range support)
 │   │   └── services/
-│   │       ├── transcribe.py     # Whisper transcription
-│   │       ├── detect.py         # Highlight detection (heuristic analysis)
-│   │       ├── extract.py        # Clip extraction
-│   │       ├── render.py         # Vertical rendering
-│   │       ├── sia.py            # Sia upload orchestration
-│   │       ├── sia_client.py     # Sia SDK singleton + demo fallback
-│   │       ├── sia_upload.py     # Sia upload helpers
-│   │       ├── pipeline_orchestrator.py  # 5-stage pipeline coordination
-│   │       ├── pipeline_events.py        # Pipeline event emission
-│   │       └── pipeline_steps.py         # Pipeline step tracking
-│   └── migrations/
-│       └── add_source_url.sql
+│   │       ├── async_subprocess.py    # Non-blocking subprocess runner (ffmpeg, whisper)
+│   │       ├── cleanup.py             # Local file cleanup after Sia storage
+│   │       ├── transcribe.py          # Whisper transcription
+│   │       ├── detect.py              # Highlight detection (heuristic + optional LLM)
+│   │       ├── extract.py             # Clip extraction via ffmpeg
+│   │       ├── render.py              # Vertical rendering with OpenCV subject tracking
+│   │       ├── sia_client.py          # Sia SDK singleton + demo fallback + key persistence
+│   │       ├── sia_upload.py          # Source video Sia upload (pipeline stage 0)
+│   │       ├── sia.py                 # Sia artifact storage (pipeline stage 5)
+│   │       ├── pipeline_orchestrator.py   # 6-stage pipeline coordination with per-job lock
+│   │       ├── pipeline_events.py         # SSE event bus (asyncio queues)
+│   │       └── pipeline_steps.py          # Pipeline step UPSERT + status computation
+│   ├── migrations/
+│   │   └── add_source_url.sql
+│   └── docs/
 ├── frontend/
 │   ├── Dockerfile
 │   ├── .env.example
@@ -258,7 +266,7 @@ rebit/
 │   ├── postcss.config.mjs
 │   ├── eslint.config.mjs
 │   ├── prisma.config.ts
-│   ├── proxy.ts                  # Route protection middleware
+│   ├── proxy.ts                  # Route protection middleware (setup check + auth)
 │   ├── app/
 │   │   ├── globals.css           # Global styles
 │   │   ├── layout.tsx            # Root layout with Sidebar + TopNav
@@ -266,7 +274,7 @@ rebit/
 │   │   ├── login/
 │   │   │   └── page.tsx          # Login page (passkey authentication)
 │   │   ├── setup/
-│   │   │   └── page.tsx          # First-run setup wizard
+│   │   │   └── page.tsx          # First-run setup wizard (Sia → OpenRouter → Providers → Sign Up)
 │   │   ├── projects/
 │   │   │   ├── page.tsx          # Project listing
 │   │   │   └── [id]/
@@ -281,43 +289,48 @@ rebit/
 │   │   │   └── page.tsx          # Unauthorized access page
 │   │   └── api/
 │   │       ├── inngest/
-│   │       │   └── route.ts      # Inngest handler
+│   │       │   └── route.ts      # Inngest handler (serves pipeline functions)
 │   │       ├── setup/
-│   │       │   ├── status/
-│   │       │   ├── sia/
-│   │       │   ├── sia/check/
-│   │       │   ├── providers/
-│   │       │   └── complete/
+│   │       │   ├── status/       # GET setup completion status
+│   │       │   ├── sia/          # POST Sia configuration
+│   │       │   ├── sia/check/    # POST Sia approval check
+│   │       │   ├── openrouter/   # POST OpenRouter API key
+│   │       │   ├── providers/    # POST OAuth/WebAuthn config
+│   │       │   └── complete/     # POST mark setup complete
 │   │       ├── sia/
-│   │       │   └── status/
+│   │       │   └── status/       # GET Sia connection status
 │   │       ├── config/
-│   │       │   └── backend-url/
+│   │       │   └── backend-url/  # GET backend URL from DB
 │   │       ├── auth/
-│   │       │   ├── [...nextauth]/
+│   │       │   ├── [...nextauth]/    # NextAuth handlers
 │   │       │   └── passkey/
-│   │       │       ├── status/
-│   │       │       ├── register/
+│   │       │       ├── status/       # GET passkey enrollment status
+│   │       │       ├── register/     # POST passkey registration (logged-in)
 │   │       │       │   ├── begin/
 │   │       │       │   └── complete/
-│   │       │       ├── register-first/
+│   │       │       ├── register-first/  # POST first-time passkey registration
 │   │       │       │   ├── begin/
 │   │       │       │   └── complete/
-│   │       │       ├── auth/
+│   │       │       ├── auth/          # POST passkey authentication
 │   │       │       │   ├── begin/
 │   │       │       │   └── complete/
-│   │       │       └── delete/
+│   │       │       └── delete/        # POST delete passkey
 │   │       ├── jobs/
-│   │       │   ├── route.ts
+│   │       │   ├── route.ts           # GET list jobs
 │   │       │   └── [jobId]/
-│   │       │       ├── route.ts
-│   │       │       ├── start-pipeline/
-│   │       │       └── segments/
+│   │       │       ├── route.ts       # GET job detail, DELETE job
+│   │       │       ├── start-pipeline/ # POST start/resume pipeline
+│   │       │       ├── events/        # GET SSE stream for pipeline progress
+│   │       │       └── clips/
+│   │       │           └── [segmentId]/
+│   │       │               ├── route.ts       # GET serve clip video
+│   │       │               └── download/      # GET download clip file
 │   │       ├── upload/
-│   │       │   └── route.ts
+│   │       │   └── route.ts       # POST upload video (proxies to backend)
 │   │       ├── url-import/
-│   │       │   ├── route.ts
-│   │       │   └── info/
-│   │       └── health/
+│   │       │   ├── route.ts       # POST import from URL
+│   │       │   └── info/          # POST fetch URL metadata
+│   │       └── health/            # GET health check
 │   ├── components/
 │   │   ├── TopNav.tsx
 │   │   ├── Sidebar.tsx
@@ -329,31 +342,31 @@ rebit/
 │   │   ├── SiaStatus.tsx
 │   │   └── SessionProvider.tsx
 │   ├── lib/
-│   │   ├── config.ts
+│   │   ├── config.ts             # DB-backed config (auth secret, backend URL)
 │   │   ├── types/
-│   │   │   └── index.ts
+│   │   │   └── index.ts          # TypeScript type definitions
 │   │   ├── hooks/
-│   │   │   └── usePipelineSSE.ts
+│   │   │   └── usePipelineSSE.ts # SSE hook for real-time pipeline updates
 │   │   ├── mock/
-│   │   │   └── data.ts
+│   │   │   └── data.ts           # Mock data for development
 │   │   ├── inngest/
-│   │   │   ├── client.ts
-│   │   │   └── pipeline.ts
+│   │   │   ├── client.ts         # Inngest client
+│   │   │   └── pipeline.ts       # Inngest pipeline functions (call backend API)
 │   │   ├── sia/
-│   │   │   ├── client.ts
-│   │   │   └── upload.ts
+│   │   │   ├── client.ts         # Sia frontend client
+│   │   │   └── upload.ts         # Sia upload helpers
 │   │   ├── auth/
-│   │   │   ├── auth.config.ts
-│   │   │   ├── auth.ts
-│   │   │   ├── guards.ts
-│   │   │   ├── seed.ts
-│   │   │   └── webauthn.ts
+│   │   │   ├── auth.config.ts    # NextAuth config (passkey credentials provider)
+│   │   │   ├── auth.ts           # Lazy NextAuth instance (DB-backed secrets)
+│   │   │   ├── guards.ts         # Auth guards for routes and API
+│   │   │   ├── seed.ts           # User seeding script
+│   │   │   └── webauthn.ts       # WebAuthn server-side helpers
 │   │   └── prisma/
-│   │       ├── client.ts
-│   │       ├── schema.prisma
-│   │       └── migrations/
+│   │       ├── client.ts         # Prisma client singleton
+│   │       ├── schema.prisma     # Database schema (User, Passkey, Job, Segment, etc.)
+│   │       └── migrations/       # Prisma migrations
 │   ├── types/
-│   │   └── next-auth.d.ts
+│   │   └── next-auth.d.ts        # NextAuth type extensions
 │   └── public/
 │       ├── file.svg
 │       ├── globe.svg
@@ -367,7 +380,41 @@ rebit/
 
 ## Architecture Notes
 
-### Video Processing Pipeline
+### Pipeline Orchestration
+
+The pipeline runs as an async Python task inside the FastAPI backend, NOT via Inngest. When a job is created (via upload or URL import), the backend calls `start_pipeline_task()` which:
+
+1. **Acquires a per-job lock** — atomically sets `pipeline_lock_at` on the Job row. Only one caller can ever win this race, preventing duplicate pipeline executions.
+2. **Spawns a background task** — `asyncio.create_task()` runs the 6 stages sequentially.
+3. **Releases the lock** — when the pipeline finishes (success or failure), the lock is cleared. If the process crashes, locks older than 20 minutes are treated as abandoned and can be re-acquired.
+
+Each stage has a per-stage timeout (5-10 minutes) enforced by `asyncio.wait_for()`. If a stage times out, the job is marked `failed` and the pipeline stops.
+
+### Pipeline Stage Contract
+
+Each pipeline function receives `(jobId, db)` and returns `(passed: bool, message: str)`. Stages are called sequentially by the orchestrator. Progress is written to `PipelineStep` rows via a PostgreSQL UPSERT (INSERT ... ON CONFLICT DO UPDATE) that prevents duplicate rows even under concurrent execution.
+
+### Job Status Computation
+
+Job status is **computed from PipelineStep rows** rather than read from the `job.status` column. This is because the orchestrator's long-running database session can cause the column to lag behind reality. The `job_status_from_step_rows()` function in `pipeline_steps.py` determines status by examining all step rows:
+
+1. Any stage `failed` → `"failed"`
+2. Any stage `running` → the corresponding status label (e.g. `"transcribing"`)
+3. No rows → `"queued"`
+4. All stages complete → `"complete"`
+5. Otherwise → the label for the earliest missing/incomplete stage
+
+### Real-time Updates (SSE)
+
+Pipeline progress is streamed to the frontend via Server-Sent Events (SSE) at `GET /api/jobs/{job_id}/events`. The backend uses asyncio queues — each job gets its own queue, and pipeline stages publish events as they progress. The frontend connects to this endpoint and receives:
+
+- `step_update` — Pipeline step progress changed (stage, status, progressPct, message)
+- `job_status` — Overall job status changed
+- `pipeline_complete` — All stages finished
+- `sia_log` — Sia upload log entries
+- `keepalive` — Sent every 30s to maintain connection
+
+### Video Processing
 
 The backend runs inside Docker. Video processing uses FFmpeg for:
 - Audio extraction (for transcription)
@@ -376,11 +423,13 @@ The backend runs inside Docker. Video processing uses FFmpeg for:
 
 All processing happens locally on the backend container. No external video processing services are used.
 
-### Pipeline Stage Contract
+### Vertical Rendering with Subject Tracking
 
-Each pipeline function receives `(jobId, db)` and returns `(passed: bool, message: str)`. Stages are called by the Inngest function via HTTP POST to the backend's `/api/{stage}` endpoints. Logs are written to `PipelineStep` in the database.
+The render stage uses a three-tier approach to keep the primary subject centered in the vertical crop:
 
-The pipeline runs 5 stages sequentially. If any stage fails, the job is marked `failed` and the function stops. If all 5 pass (including Sia storage), the job moves to `complete` status.
+1. **Face detection** — OpenCV's Haar cascade finds the largest face in sampled frames
+2. **Saliency detection** — OpenCV's saliency module finds the visually dominant region (for non-face content like products, screens, animals)
+3. **Center crop** — Final fallback if neither face nor saliency detection is available
 
 ### Highlight Detection
 
@@ -389,37 +438,59 @@ Stage 2 analyzes the transcript using a multi-strategy heuristic engine that eva
 - **Virality score**: Likelihood of being shared, based on position, duration, emotional signals, and sentence structure
 - **Emotional signals**: Sentiment detection across 8 categories (excitement, surprise, urgency, curiosity, authority, positivity, negativity, contrast)
 
-The heuristic engine runs locally and requires no external API keys. Nearby segments are merged for natural boundaries, and the top segments by score are selected as clips.
+The heuristic engine runs locally and requires no external API keys. If an **OpenRouter API key** is configured, the detection is optionally enhanced with GPT-4o-mini for higher-quality scoring. Nearby segments are merged for natural boundaries, and the top segments by score are selected as clips.
 
 ### Sia Integration
 
-- **Sia upload is Stage 5 of the pipeline.** Upload runs automatically as part of the processing pipeline, not during human approval.
+- **Sia upload is Stage 0 and Stage 5 of the pipeline.** Stage 0 uploads the source video; Stage 5 uploads all artifacts (transcript, clips, source video).
 - **Setup wizard:** First-time Sia configuration is handled by the browser-based Setup Wizard at `/setup` (Sia indexer URL, App ID, recovery phrase, approval URL flow). Derived App Key stored in `appkey.hex`, automatic reconnection on restarts.
-- **Demo mode:** If Sia is unreachable or the wizard is skipped, the platform gracefully falls back to simulated uploads with fake object IDs.
+- **Key persistence:** The AppKey is stored on disk at the path specified by `SIA_KEY_PATH`. A legacy path at `/tmp/sia/appkey.hex` is automatically migrated on first boot.
+- **Demo mode:** If Sia is unreachable or the wizard is skipped, the platform gracefully falls back to simulated uploads with fake object IDs prefixed with `demo-sia-`.
+- **Object ID validation:** The `is_real_object_id()` function validates that object IDs are genuine 64-char hex strings before passing them to the live SDK, preventing confusing "hex error: Unexpected length" errors.
 - **Results:** Every video, transcript, and clip is uploaded to Sia Network, immutable, content-addressed, publicly verifiable. Anyone can verify any result by fetching the corresponding CID from the network directly.
 
 ### File Upload Flow
 
-1. User uploads a video file or provides a URL via the frontend upload page.
-2. Frontend writes the video to a shared `task_uploads` Docker volume.
-3. An Inngest event (`rebit/job.created`) triggers the 5-stage processing pipeline.
-4. Each stage calls the backend API, which reads the video from the shared volume.
-5. After all 5 stages pass (including Sia storage), the job is marked `complete` and clips are available for viewing.
-
-### Authentication & Authorization
-
-- **Passkey-first:** Uses WebAuthn for passwordless authentication via passkeys (Touch ID, Face ID, security keys).
-- **NextAuth.js:** Session management with JWT strategies, passkey credentials stored in the database.
-- **Role-based access:** Two tiers: `user` (basic access) and `super_admin` (full access).
-- **Middleware:** Route protection via `proxy.ts`. Unauthenticated users are redirected to `/login`.
-- **Sidebar navigation:** Collapsible rail that adapts to user role.
+1. User uploads a video file or provides a direct media URL via the frontend upload page.
+2. Frontend proxies the upload to the backend API (with auth context).
+3. Backend saves the video to a shared `task_uploads` Docker volume and creates a Job record.
+4. The pipeline starts automatically in the background via `start_pipeline_task()`.
+5. Each stage processes the video from the shared volume and writes results to the database.
+6. After all 6 stages pass (including Sia storage), the job is marked `complete` and clips are available for viewing.
 
 ### URL Import
 
-Videos can be imported from URLs (YouTube, Vimeo, TikTok, etc.). The process:
+Videos can be imported from **direct media URLs only** (links ending in .mp4, .webm, .mov, .mkv, etc.). The process:
 1. User pastes a URL and clicks "Check URL" to fetch video metadata
-2. User confirms the import, triggering the download
-3. Downloaded video enters the same pipeline as file uploads
+2. The backend probes the URL using multiple strategies (extension check, query parameter analysis, HTTP HEAD/Ranged GET)
+3. User confirms the import, triggering the download with browser-like headers to avoid CDN blocks
+4. Downloaded video is eagerly uploaded to Sia, then enters the same pipeline as file uploads
+
+> **Note:** YouTube, Vimeo, TikTok, and Twitter/X URLs are NOT supported. Only direct media file URLs work.
+
+### Authentication & Authorization
+
+- **Passkey-first:** Uses WebAuthn for passwordless authentication via passkeys (Touch ID, Face ID, security keys). First-time registration creates a user account automatically.
+- **NextAuth.js v5:** Session management with JWT strategies, passkey credentials stored in the database. Auth secret is stored in the database (AppSettings table) — only `DATABASE_URL` is required as an environment variable.
+- **OAuth providers:** Google and GitHub OAuth can be configured through the setup wizard. Provider credentials are stored in the database.
+- **Lazy initialization:** NextAuth is initialized lazily using database-backed secrets. If no secret is configured yet (during initial setup), a mock instance returns 503 for API routes.
+- **Middleware:** Route protection via `proxy.ts`. Unauthenticated users are redirected to `/login`. The middleware also checks if setup is complete and redirects to `/setup` if not.
+- **Sidebar navigation:** Collapsible rail that adapts to user role.
+
+### Clip Serving
+
+Clips are served via `GET /api/jobs/{job_id}/clips/{segment_id}` with proper HTTP Range (partial content) support for HTML5 video seeking. Sources tried in order:
+
+1. **Sia network** (primary) — downloaded and cached locally for subsequent range requests
+2. **Local filesystem** (fast-path fallback) — served directly if the pipeline just finished
+
+### Local File Cleanup
+
+After all artifacts are successfully stored on Sia, local files are automatically removed to prevent the server from filling up. Cleanup removes:
+- Source video from the upload directory
+- Entire output tree (clips, rendered videos, etc.)
+
+Cleanup only runs when ALL uploads succeeded. If any upload failed, local files are preserved for retry.
 
 ---
 
