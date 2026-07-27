@@ -167,7 +167,7 @@ async def _fetch_and_cache_from_sia(
     logger.info(f"Downloading clip {segment_id} from Sia: {sia_object_id}")
     try:
         pinned_obj = await sdk.object(sia_object_id)
-        download = await sdk.download(pinned_obj)
+        download = sdk.download(pinned_obj)
         try:
             data = await download.read_all()
         finally:
