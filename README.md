@@ -8,6 +8,8 @@ Upload → Sia Upload → Transcribe → Detect → Extract → Render → Sia S
 
 Every stage is an async Python function with per-stage timeouts, progress reporting via SSE, and a per-job lock that prevents concurrent execution. Failed stages report exactly what to fix.
 
+![Rebit pipeline detail view showing all six stages marked complete, with Sia upload logs and object IDs](./frontend/public/screenshots/pipeline-complete.png)
+
 ---
 
 ## What it does
@@ -27,33 +29,37 @@ Upload a video file or paste a direct media URL and watch it move through 6 auto
 
 ## Pipeline Stages
 
-| # | Stage | What it does |
-|---|-------|-------------|
-| 0 | Sia Upload | Uploads the source video to the Sia Network for immutable storage |
-| 1 | Transcription | Extracts audio and runs Whisper speech-to-text, generating VTT and JSON transcripts |
-| 2 | Highlight Detection | Analyzes transcript for hook strength, virality score, and emotional signals using heuristic analysis + optional LLM enhancement; creates Segment records |
-| 3 | Clip Extraction | Uses FFmpeg to cut video segments based on detected highlights |
-| 4 | Vertical Render | Converts clips to 9:16 aspect ratio with smart subject tracking (face detection → saliency → center crop) |
-| 5 | Sia Storage | Uploads all artifacts (transcript, clips, source video) to Sia Network |
+| #   | Stage               | What it does                                                                                                                                              |
+| --- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0   | Sia Upload          | Uploads the source video to the Sia Network for immutable storage                                                                                         |
+| 1   | Transcription       | Extracts audio and runs Whisper speech-to-text, generating VTT and JSON transcripts                                                                       |
+| 2   | Highlight Detection | Analyzes transcript for hook strength, virality score, and emotional signals using heuristic analysis + optional LLM enhancement; creates Segment records |
+| 3   | Clip Extraction     | Uses FFmpeg to cut video segments based on detected highlights                                                                                            |
+| 4   | Vertical Render     | Converts clips to 9:16 aspect ratio with smart subject tracking (face detection → saliency → center crop)                                                 |
+| 5   | Sia Storage         | Uploads all artifacts (transcript, clips, source video) to Sia Network                                                                                    |
+
+![Rebit clip review screen showing four candidate clips, each with a numeric score, hook strength, and emotional signal label](./frontend/public/screenshots/clip-review.png)
+
+Every candidate clip surfaces its score, hook strength, and the emotional signal that got it selected, so you can approve or reject before anything renders.
 
 ---
 
 ## Stack
 
-| Layer | Tech |
-|-------|------|
-| Frontend | Next.js 16, TypeScript, TailwindCSS v4, NextAuth.js v5 |
-| Backend | Python (FastAPI), SQLAlchemy (async), PostgreSQL |
-| Pipeline Orchestration | Async Python (asyncio.create_task) with per-job lock |
-| Event Bus | Inngest (optional event-driven triggers) |
-| Transcription | Whisper (local, via CLI or Python module) |
-| Highlight Analysis | Multi-strategy heuristic engine + optional OpenRouter LLM (GPT-4o-mini) |
-| Video Processing | FFmpeg (async subprocess) |
-| Subject Tracking | OpenCV (face detection via Haar cascade + saliency detection) |
-| Storage | Sia Network via `sia-storage` SDK v0.8.0 |
-| ORM | Prisma (frontend-owned schema) + SQLAlchemy (backend mirror) |
-| Auth | NextAuth.js with Passkey (WebAuthn), Google OAuth, GitHub OAuth |
-| Real-time Updates | Server-Sent Events (SSE) via asyncio event queues |
+| Layer                  | Tech                                                                    |
+| ---------------------- | ----------------------------------------------------------------------- |
+| Frontend               | Next.js 16, TypeScript, TailwindCSS v4, NextAuth.js v5                  |
+| Backend                | Python (FastAPI), SQLAlchemy (async), PostgreSQL                        |
+| Pipeline Orchestration | Async Python (asyncio.create_task) with per-job lock                    |
+| Event Bus              | Inngest (optional event-driven triggers)                                |
+| Transcription          | Whisper (local, via CLI or Python module)                               |
+| Highlight Analysis     | Multi-strategy heuristic engine + optional OpenRouter LLM (GPT-4o-mini) |
+| Video Processing       | FFmpeg (async subprocess)                                               |
+| Subject Tracking       | OpenCV (face detection via Haar cascade + saliency detection)           |
+| Storage                | Sia Network via `sia-storage` SDK v0.8.0                                |
+| ORM                    | Prisma (frontend-owned schema) + SQLAlchemy (backend mirror)            |
+| Auth                   | NextAuth.js with Passkey (WebAuthn), Google OAuth, GitHub OAuth         |
+| Real-time Updates      | Server-Sent Events (SSE) via asyncio event queues                       |
 
 ---
 
@@ -65,12 +71,12 @@ Upload a video file or paste a direct media URL and watch it move through 6 auto
 docker compose up --build
 ```
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| Frontend | http://localhost:3000 | Next.js dashboard |
-| Backend | http://localhost:8000 | FastAPI pipeline executor |
-| Inngest | http://localhost:8288 | Event-driven pipeline UI (optional) |
-| PostgreSQL | localhost:5432 | Database |
+| Service    | URL                   | Description                         |
+| ---------- | --------------------- | ----------------------------------- |
+| Frontend   | http://localhost:3000 | Next.js dashboard                   |
+| Backend    | http://localhost:8000 | FastAPI pipeline executor           |
+| Inngest    | http://localhost:8288 | Event-driven pipeline UI (optional) |
+| PostgreSQL | localhost:5432        | Database                            |
 
 **No environment variables needed.** All configuration is handled through the browser-based Setup Wizard on first boot. Open http://localhost:3000 and complete the 4-step wizard:
 
@@ -168,11 +174,11 @@ npx prisma generate
 npm run dev
 ```
 
-| Service | URL |
-|---------|-----|
+| Service  | URL                   |
+| -------- | --------------------- |
 | Frontend | http://localhost:3000 |
-| Backend | http://localhost:8000 |
-| Inngest | http://localhost:8288 |
+| Backend  | http://localhost:8000 |
+| Inngest  | http://localhost:8288 |
 
 **First boot:** Open http://localhost:3000 and complete the **Setup Wizard** (Sia → OpenRouter → Providers → Sign Up). See the Docker section above for details on each step.
 
@@ -180,13 +186,13 @@ npm run dev
 
 The wizard persists configuration into the database via these API endpoints:
 
-| Step | Endpoint | What it stores |
-|------|----------|---------------|
-| Sia | `POST /api/setup/sia` | Indexer URL, App ID, App Name, App Description, recovery phrase |
-| Sia check | `POST /api/setup/sia/check` | Polls for approval completion |
-| OpenRouter | `POST /api/setup/openrouter` | OpenRouter API key |
-| Providers | `POST /api/setup/providers` | OAuth client IDs/secrets, WebAuthn RP ID & Origin |
-| Complete | `POST /api/setup/complete` | Marks setup as complete, generates auth secret, stores backend URL |
+| Step       | Endpoint                     | What it stores                                                     |
+| ---------- | ---------------------------- | ------------------------------------------------------------------ |
+| Sia        | `POST /api/setup/sia`        | Indexer URL, App ID, App Name, App Description, recovery phrase    |
+| Sia check  | `POST /api/setup/sia/check`  | Polls for approval completion                                      |
+| OpenRouter | `POST /api/setup/openrouter` | OpenRouter API key                                                 |
+| Providers  | `POST /api/setup/providers`  | OAuth client IDs/secrets, WebAuthn RP ID & Origin                  |
+| Complete   | `POST /api/setup/complete`   | Marks setup as complete, generates auth secret, stores backend URL |
 
 All values are stored in the `AppSettings` database table and read back on subsequent visits. The auth secret and backend URL are also stored in the database, so only `DATABASE_URL` is needed as an environment variable.
 
@@ -417,6 +423,7 @@ Pipeline progress is streamed to the frontend via Server-Sent Events (SSE) at `G
 ### Video Processing
 
 The backend runs inside Docker. Video processing uses FFmpeg for:
+
 - Audio extraction (for transcription)
 - Clip extraction (segment cutting)
 - Vertical format conversion (9:16 aspect ratio)
@@ -434,6 +441,7 @@ The render stage uses a three-tier approach to keep the primary subject centered
 ### Highlight Detection
 
 Stage 2 analyzes the transcript using a multi-strategy heuristic engine that evaluates:
+
 - **Hook strength**: How engaging the opening of each segment is, scored by keyword analysis
 - **Virality score**: Likelihood of being shared, based on position, duration, emotional signals, and sentence structure
 - **Emotional signals**: Sentiment detection across 8 categories (excitement, surprise, urgency, curiosity, authority, positivity, negativity, contrast)
@@ -461,6 +469,7 @@ The heuristic engine runs locally and requires no external API keys. If an **Ope
 ### URL Import
 
 Videos can be imported from **direct media URLs only** (links ending in .mp4, .webm, .mov, .mkv, etc.). The process:
+
 1. User pastes a URL and clicks "Check URL" to fetch video metadata
 2. The backend probes the URL using multiple strategies (extension check, query parameter analysis, HTTP HEAD/Ranged GET)
 3. User confirms the import, triggering the download with browser-like headers to avoid CDN blocks
@@ -487,6 +496,7 @@ Clips are served via `GET /api/jobs/{job_id}/clips/{segment_id}` with proper HTT
 ### Local File Cleanup
 
 After all artifacts are successfully stored on Sia, local files are automatically removed to prevent the server from filling up. Cleanup removes:
+
 - Source video from the upload directory
 - Entire output tree (clips, rendered videos, etc.)
 
@@ -498,18 +508,18 @@ Cleanup only runs when ALL uploads succeeded. If any upload failed, local files 
 
 After the initial launch milestone, the focus will shift to broadening the types of content and features the platform supports. The current video-based format is well suited for content creation, but the processing infrastructure is designed to be extensible. The following features are planned:
 
-| Category | Description |
-|----------|-------------|
-| Multi-language | Support for transcription and processing in multiple languages |
-| Batch Processing | Queue multiple videos for sequential processing |
-| Custom Templates | User-defined rendering templates and styles |
-| Analytics | View counts, engagement metrics, and performance tracking |
-| Sharing | Direct sharing to social platforms with embedded metadata |
-| Webhooks | Real-time notifications for pipeline events |
-| API Access | Programmatic access to the processing pipeline |
+| Category         | Description                                                    |
+| ---------------- | -------------------------------------------------------------- |
+| Multi-language   | Support for transcription and processing in multiple languages |
+| Batch Processing | Queue multiple videos for sequential processing                |
+| Custom Templates | User-defined rendering templates and styles                    |
+| Analytics        | View counts, engagement metrics, and performance tracking      |
+| Sharing          | Direct sharing to social platforms with embedded metadata      |
+| Webhooks         | Real-time notifications for pipeline events                    |
+| API Access       | Programmatic access to the processing pipeline                 |
 
 Each feature will integrate seamlessly with the existing pipeline and Sia storage infrastructure.
 
 ---
 
-*Built in the open. Videos are reproducible, shareable, and forkable. Anyone can run the same processing pipeline and verify the results for themselves.*
+_Built in the open. Videos are reproducible, shareable, and forkable. Anyone can run the same processing pipeline and verify the results for themselves._

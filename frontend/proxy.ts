@@ -64,7 +64,8 @@ export default async function proxy(
     pathname.startsWith('/globe.svg') ||
     pathname.startsWith('/next.svg') ||
     pathname.startsWith('/vercel.svg') ||
-    pathname.startsWith('/window.svg');
+    pathname.startsWith('/window.svg') ||
+    pathname.startsWith('/screenshots');
 
   if (isPublicAsset) {
     return NextResponse.next();
@@ -90,6 +91,7 @@ export default async function proxy(
     pathname === '/setup' ||
     pathname.startsWith('/api/setup') ||
     pathname === '/login' ||
+    pathname === '/whitepaper' ||
     pathname.startsWith('/api/auth') ||
     pathname.startsWith('/api/inngest') ||
     pathname.startsWith('/api/upload')
@@ -118,5 +120,5 @@ export default async function proxy(
 export const config = {
   // Exclude /api/upload from middleware (large multipart bodies are
   // truncated at 10MB by Next.js middleware, corrupting FormData).
-  matcher: ['/((?!api/auth|api/inngest|api/upload|_next/static|_next/image|favicon.ico|file.svg|globe.svg|next.svg|vercel.svg|window.svg).*)'],
+  matcher: ['/((?!api/auth|api/inngest|api/upload|_next/static|_next/image|favicon.ico|file.svg|globe.svg|next.svg|vercel.svg|window.svg|screenshots).*)'],
 };
