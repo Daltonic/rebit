@@ -23,13 +23,13 @@ WORKDIR /app
 # Install runtime system dependencies:
 #   ffmpeg   — audio extraction, clip cutting, vertical rendering
 #   curl     — healthcheck
-#   libgl1   — OpenCV (opencv-contrib-python-headless) needs libGL.so.1
-#   libglib2.0-0 — OpenCV glib dependency
+# NOTE: opencv-contrib-python-headless is the headless variant and does
+# NOT need libGL or any display libraries — that's the whole point of
+# the -headless suffix. The standard opencv-python would need them, but
+# we use the headless variant specifically for server environments.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed Python packages from builder stage
