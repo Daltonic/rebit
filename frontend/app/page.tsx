@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import Image from 'next/image';
+import { auth } from '@/lib/auth/auth';
 import {
   Zap,
   Shield,
@@ -92,7 +93,18 @@ const FEATURES = [
   },
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
+  // Gracefully handle auth errors — during initial setup the auth secret
+  // may not exist in the database yet, so auth() would throw.
+  let session = null;
+  try {
+    session = await auth();
+  } catch {
+    // Auth not configured yet — treat as unauthenticated
+  }
+
+  const isLoggedIn = !!session?.user;
+
   return (
     <div className="min-h-screen">
       {/* Hero */}
@@ -132,19 +144,19 @@ export default function HomePage() {
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 px-4 mb-4">
           <Link
-            href="/login"
+            href={isLoggedIn ? '/upload' : '/login'}
             className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium text-sm transition-all"
             style={{ background: 'var(--accent)', color: 'white', boxShadow: '0 0 20px var(--accent-glow)' }}
           >
-            Get Started
+            {isLoggedIn ? 'Upload a Video' : 'Get Started'}
             <ArrowRight size={16} />
           </Link>
           <Link
-            href="/login"
+            href={isLoggedIn ? '/projects' : '/login'}
             className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium text-sm transition-all"
             style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
           >
-            Sign In
+            {isLoggedIn ? 'My Projects' : 'Sign In'}
           </Link>
         </div>
 
@@ -253,6 +265,7 @@ export default function HomePage() {
                 src="/screenshots/clip-review-cropped.png"
                 alt="Rebit clip review screen showing four candidate clips with hook and score labels"
                 fill
+                sizes="(max-width: 768px) 100vw, 50vw"
                 className="object-cover object-top"
               />
             </div>
@@ -284,6 +297,7 @@ export default function HomePage() {
                 src="/screenshots/pipeline-processing-cropped.png"
                 alt="Rebit pipeline detail screen showing all six stages complete with Sia upload logs"
                 fill
+                sizes="(max-width: 768px) 100vw, 50vw"
                 className="object-cover object-top"
               />
             </div>
@@ -335,11 +349,11 @@ export default function HomePage() {
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
           <Link
-            href="/login"
+            href={isLoggedIn ? '/upload' : '/login'}
             className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium text-sm transition-all"
             style={{ background: 'var(--accent)', color: 'white', boxShadow: '0 0 20px var(--accent-glow)' }}
           >
-            Get Started
+            {isLoggedIn ? 'Upload a Video' : 'Get Started'}
             <ArrowRight size={16} />
           </Link>
           <Link

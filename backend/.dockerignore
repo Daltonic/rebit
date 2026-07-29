@@ -1,0 +1,45 @@
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+*.egg
+.venv
+venv
+env
+.pytest_cache
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Build artifacts
+dist
+build
+
+# Version control
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (mounted as volumes at runtime)
+data
+
+# Documentation
+*.md
+LICENSE
+
+# Docker
+Dockerfile
+.dockerignore
