@@ -1,19 +1,33 @@
-# ReBit Frontend — Next.js
-# Multi-stage build for production (standalone output)
+# ReBit Frontend — Next.js (three-stage build)
+# ============================================================
+# Stage 1: Dependencies  — install npm packages
+# Stage 2: Builder       — generate Prisma client & build
+# Stage 3: Runner        — minimal production image
+# ============================================================
 
-# ── Builder ──────────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+ARG NODE_VERSION=20-alpine
+
+# ── Stage 1: Dependencies ───────────────────────────────────────────────
+FROM node:${NODE_VERSION} AS deps
+
+RUN apk add --no-cache libc6-compat
 
 WORKDIR /app
 
-# Install build dependencies (needed for Prisma and native modules)
-RUN apk add --no-cache python3 make g++
+COPY package.json package-lock.json* ./
 
-# Copy dependency manifests first for layer caching
-COPY package.json package-lock.json ./
 RUN npm ci && npm cache clean --force
 
-# Copy the rest of the application
+
+# ── Stage 2: Builder ────────────────────────────────────────────────────
+FROM node:${NODE_VERSION} AS builder
+
+WORKDIR /app
+
+# Copy pre-installed node_modules from deps stage (avoids re-installing)
+COPY --from=deps /app/node_modules ./node_modules
+
+# Copy the rest of the application source code
 COPY . .
 
 # Generate Prisma client
@@ -21,15 +35,21 @@ RUN npx prisma generate
 
 # Build the Next.js app (output: 'standalone' in next.config.ts produces
 # .next/standalone/ with all dependencies bundled)
-RUN npm run build
+RUN npm run build && \
+    ls -la /app/.next/standalone/server.js > /dev/null 2>&1 || \
+    (echo "FATAL: .next/standalone/ was not produced by the build!" && exit 1)
 
-# ── Runner ───────────────────────────────────────────────────────────────
-FROM node:20-alpine AS runner
+
+# ── Stage 3: Runner ─────────────────────────────────────────────────────
+FROM node:${NODE_VERSION} AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Install runtime tools
+RUN apk add --no-cache openssl bash wget
 
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs && \
@@ -38,34 +58,41 @@ RUN addgroup --system --gid 1001 nodejs && \
 # Copy public assets (served directly, not part of standalone)
 COPY --from=builder /app/public ./public
 
-# Copy the standalone build output — this includes the server, all JS
-# bundles, and a minimal node_modules with only production deps.
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+# Copy standalone output — use explicit destination path to avoid
+# BuildKit checksum issues with large context transfers
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone /app/.next/standalone
 
 # Copy static assets (hashed chunks, CSS, etc.) that the standalone
-# server expects at ./.next/static
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# server expects at ./.next/static — but inside standalone, Next.js
+# looks for them at ./next/static relative to the server.js entry
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static /app/.next/standalone/.next/static
 
-# Copy Prisma runtime dependencies:
-#   @prisma/*       — client, engines, adapter-pg, etc. (~166 MB)
-#   .prisma/client/ — generated client code (~9 MB)
-#   prisma/build/   — CLI binary for `migrate deploy` (~40 MB)
-#   schema.prisma   — schema file for migrations
-#   migrations/     — migration SQL files
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/prisma/build ./node_modules/prisma/build
-COPY --from=builder /app/lib/prisma/schema.prisma ./lib/prisma/schema.prisma
-COPY --from=builder /app/lib/prisma/migrations ./lib/prisma/migrations
+# Prisma runtime — copy the generated client into standalone's node_modules
+# so server.js can find @prisma/client at runtime
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma /app/.next/standalone/node_modules/.prisma
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma /app/.next/standalone/node_modules/@prisma
 
-# Copy the entrypoint script that runs migrations before starting the server
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh && \
-    chown nextjs:nodejs /docker-entrypoint.sh
+# Full node_modules from builder. Next.js 16 standalone output only
+# includes production deps, but prisma is a devDependency that we
+# need at runtime for `migrate deploy`.
+COPY --from=builder /app/node_modules /app/.next/standalone/node_modules
+
+# Prisma schema + migrations (needed for prisma migrate deploy at runtime)
+# Stored at lib/prisma/ relative to the app root (see current project layout)
+COPY --from=builder --chown=nextjs:nodejs /app/lib/prisma/schema.prisma /app/.next/standalone/lib/prisma/schema.prisma
+COPY --from=builder --chown=nextjs:nodejs /app/lib/prisma/migrations /app/.next/standalone/lib/prisma/migrations
+
+# Copy the entrypoint script
+COPY docker-entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh && \
+    chown nextjs:nodejs /app/entrypoint.sh
 
 # Create data directories for Sia key storage and uploads
 RUN mkdir -p /tmp/sia /tmp/rebit/uploads && \
     chown -R nextjs:nodejs /tmp/sia /tmp/rebit/uploads
+
+# Ensure /app is owned by nextjs
+RUN chown -R nextjs:nodejs /app
 
 USER nextjs
 
@@ -77,4 +104,4 @@ ENV HOSTNAME="0.0.0.0"
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]

@@ -3,16 +3,16 @@ set -e
 
 # ── Prisma Migrations ──────────────────────────────────────────────────
 # Run database migrations before starting the server. The prisma CLI is
-# copied from the builder stage into node_modules/prisma, but the
-# node_modules/.bin symlink doesn't survive the COPY, so we invoke the
-# CLI directly via its entry point.
+# copied from the builder stage into standalone's node_modules.
+# We cd into the standalone directory so relative paths resolve correctly.
 echo "→ Running Prisma migrations..."
 MAX_RETRIES=10
 RETRY_DELAY=3
 n=0
+cd /app/.next/standalone
 until [ "$n" -ge "$MAX_RETRIES" ]; do
-  node /app/node_modules/prisma/build/index.js migrate deploy \
-    --schema=/app/lib/prisma/schema.prisma && break
+  node node_modules/prisma/build/index.js migrate deploy \
+    --schema=lib/prisma/schema.prisma && break
   n=$((n + 1))
   echo "  Migration attempt $n failed. Retrying in ${RETRY_DELAY}s..."
   sleep "$RETRY_DELAY"

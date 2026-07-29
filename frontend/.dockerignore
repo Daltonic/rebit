@@ -5,9 +5,13 @@ yarn-debug.log
 yarn-error.log
 .pnpm-store
 
-# Build output
+# Host build output (must NOT be copied — the Docker build generates its own .next)
 .next
 out
+
+# Host Prisma artifacts (generated inside container, not copied from host)
+node_modules/.prisma
+node_modules/@prisma
 
 # Environment
 .env
