@@ -48,8 +48,7 @@ services:
       DATABASE_URL: "postgresql+asyncpg://rebit:rebit@postgres:5432/rebit"
       SIA_MODE: "${SIA_MODE:-auto}"
       SIA_KEY_PATH: "/app/data/sia/appkey.hex"
-      SIA_INDEXER_URL: "${SIA_INDEXER_URL:-}"
-      OPENROUTER_KEY: "${OPENROUTER_KEY:-}"
+      SIA_INDEXER_URL: "${SIA_INDEXER_URL:-https://sia.storage}"
       CORS_ORIGINS: "http://localhost:3000"
       DEBUG: "${DEBUG:-false}"
       UPLOAD_DIR: "/tmp/rebit/uploads"
@@ -78,7 +77,7 @@ services:
       BACKEND_URL: "http://backend:8000"
       SIA_MODE: "${SIA_MODE:-auto}"
       SIA_KEY_PATH: "/app/data/sia/appkey.hex"
-      SIA_INDEXER_URL: "${SIA_INDEXER_URL:-}"
+      SIA_INDEXER_URL: "${SIA_INDEXER_URL:-https://sia.storage}"
     volumes:
       - task_uploads:/tmp/rebit/uploads
       - sia_data:/app/data

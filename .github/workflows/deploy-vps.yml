@@ -1,0 +1,142 @@
+# ReBit — Deploy to Ubuntu VPS
+# ============================================================
+# On every push to main:
+#   1. Ensures the target directory exists on the VPS
+#   2. Copies the full repo via SCP
+#   3. Scans docker-compose.yml for ${VAR} references and builds
+#      ONE root .env file from matching GitHub Secrets — no
+#      variable names are duplicated here, compose is the single
+#      source of truth for what env vars exist.
+#   4. Rebuilds and restarts services (zero-downtime)
+#   5. Cleans up dangling Docker images
+# ============================================================
+
+name: Deploy to Ubuntu VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  prepare_environment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure target directory exists on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            mkdir -p /dockerized/containers/rebit
+
+      - name: Copy repository files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: './'
+          target: '/dockerized/containers/rebit'
+
+      - name: Build root .env from docker-compose.yml variables
+        env:
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: |
+          # Pull every ${VAR} or ${VAR:-default} reference straight out of
+          # docker-compose.yml. This is the ONLY place variable names live.
+          VARS=$(grep -oP '\$\{\K[A-Z_][A-Z0-9_]*(?=(:-[^}]*)?\})' docker-compose.yml | sort -u)
+
+          echo "Variables found in docker-compose.yml:"
+          echo "$VARS"
+
+          > generated.env
+          for VAR in $VARS; do
+            VALUE=$(echo "$SECRETS_JSON" | jq -r --arg key "$VAR" '.[$key] // empty')
+            if [ -n "$VALUE" ]; then
+              echo "$VAR=$VALUE" >> generated.env
+            else
+              echo "No GitHub secret named $VAR — compose will use its own default for this one."
+            fi
+          done
+
+      - name: Upload generated .env to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: 'generated.env'
+          target: '/dockerized/containers/rebit'
+          overwrite: true
+
+      - name: Rename generated.env to .env on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            mv /dockerized/containers/rebit/generated.env /dockerized/containers/rebit/.env
+
+  deploy_with_compose:
+    needs: prepare_environment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild and restart services
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /dockerized/containers/rebit
+
+            echo "→ Pulling latest images for postgres and inngest..."
+            docker compose pull postgres inngest
+
+            echo "→ Building backend and frontend images..."
+            docker compose build backend frontend
+
+            echo "→ Restarting all services..."
+            docker compose up -d
+
+            echo "→ Waiting for health checks..."
+            sleep 10
+
+            RUNNING=$(docker compose ps --services --filter "status=running" | wc -l)
+            EXPECTED=4
+            if [ "$RUNNING" -lt "$EXPECTED" ]; then
+              echo "Only $RUNNING/$EXPECTED services are running. Showing logs..."
+              docker compose ps
+              docker compose logs --tail=20
+              exit 1
+            fi
+
+            echo "All $RUNNING services are running"
+
+  clean_up_dangling_images:
+    needs: deploy_with_compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove dangling Docker images and unused build cache
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "→ Pruning dangling images..."
+            docker image prune -af
+
+            echo "→ Pruning unused build cache..."
+            docker builder prune -af
+
+            echo "Cleanup complete"
