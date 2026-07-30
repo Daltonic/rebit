@@ -1,16 +1,23 @@
-import { defineConfig, env } from "prisma/config";
+import { defineConfig } from "prisma/config";
 
-// Prisma 7 no longer reads `url = env("DATABASE_URL")` from schema.prisma
-// for CLI operations like `migrate deploy`. The datasource URL has to
-// live here instead. This file must sit at the current working directory
-// when the CLI runs (see docker-entrypoint.sh, which cd's into the
-// standalone output before invoking prisma).
 export default defineConfig({
   schema: "lib/prisma/schema.prisma",
   migrations: {
     path: "lib/prisma/migrations",
   },
   datasource: {
-    url: env("DATABASE_URL"),
+    // Deliberately NOT using the `env()` helper here. `env()` throws
+    // immediately if the variable is missing, which breaks `prisma
+    // generate` during `docker build` — build time has no access to
+    // docker-compose's runtime `environment:` values, so DATABASE_URL
+    // genuinely isn't set yet at that point.
+    //
+    // `prisma generate` never needs a real connection, so the fallback
+    // below is never actually used for anything. `prisma migrate deploy`
+    // at container runtime gets the real value, since DATABASE_URL is
+    // set correctly by then via docker-compose.yml.
+    url:
+      process.env.DATABASE_URL ??
+      "postgresql://placeholder:placeholder@localhost:5432/placeholder",
   },
 });
