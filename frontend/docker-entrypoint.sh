@@ -11,8 +11,7 @@ RETRY_DELAY=3
 n=0
 cd /app/.next/standalone
 until [ "$n" -ge "$MAX_RETRIES" ]; do
-  node node_modules/prisma/build/index.js migrate deploy \
-    --schema=lib/prisma/schema.prisma && break
+  node node_modules/prisma/build/index.js migrate deploy && break
   n=$((n + 1))
   echo "  Migration attempt $n failed. Retrying in ${RETRY_DELAY}s..."
   sleep "$RETRY_DELAY"

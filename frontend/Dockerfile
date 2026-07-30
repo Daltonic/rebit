@@ -82,6 +82,11 @@ COPY --from=builder /app/node_modules /app/.next/standalone/node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/lib/prisma/schema.prisma /app/.next/standalone/lib/prisma/schema.prisma
 COPY --from=builder --chown=nextjs:nodejs /app/lib/prisma/migrations /app/.next/standalone/lib/prisma/migrations
 
+# Prisma 7 config file — required at runtime for `migrate deploy` to know
+# the datasource URL, since schema.prisma's inline url is no longer read
+# by the CLI. Must live at the standalone root (the entrypoint's cwd).
+COPY --from=builder --chown=nextjs:nodejs /app/prisma.config.ts /app/.next/standalone/prisma.config.ts
+
 # Copy the entrypoint script
 COPY docker-entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh && \
