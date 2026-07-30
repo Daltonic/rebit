@@ -1,12 +1,26 @@
 """
 Async SQLAlchemy engine and session factory.
 Connects to the same PostgreSQL database as the Next.js frontend.
+
+Schema ownership: Prisma (frontend) is the ONLY thing that creates or
+alters tables. This module must never run DDL. The previous version of
+this file ran `Base.metadata.create_all` plus a stack of ad-hoc
+ALTER TABLE calls on every backend boot — that's what raced Prisma's
+`migrate deploy` and produced the P3005 crash loop. If a model here
+needs a new column or constraint, add it to schema.prisma and ship it
+as a Prisma migration; do not patch it in from here.
 """
 
+import asyncio
+import logging
+
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 engine = create_async_engine(
     settings.database_url,
@@ -54,144 +68,38 @@ async def get_db_optional() -> AsyncSession | None:
         yield None
 
 
-async def init_db():
-    """Create all tables and run migrations. Called on application startup."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-        # ── Run pending migrations ────────────────────────────────────
-        # SQLAlchemy's create_all does NOT add new columns to existing tables.
-        # We need to run ALTER TABLE for any schema changes.
-
-        await conn.run_sync(_migrate_job_status_enum)
-        await conn.run_sync(_migrate_add_source_url)
-        await conn.run_sync(_migrate_add_pipeline_lock_column)
-        await conn.run_sync(_migrate_dedupe_pipeline_steps)
-        await conn.run_sync(_migrate_add_pipeline_step_unique_constraint)
-
-
-def _migrate_job_status_enum(conn):
-    """Add 'uploaded' to JobStatus enum if missing."""
-    from sqlalchemy import text
-
-    try:
-        conn.execute(
-            text("ALTER TYPE \"JobStatus\" ADD VALUE IF NOT EXISTS 'uploaded'")
-        )
-        import logging
-        logging.getLogger(__name__).info("Migration: added 'uploaded' to JobStatus enum")
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).debug(f"Migration: JobStatus enum already had 'uploaded' or could not add: {e}")
-
-
-def _migrate_add_source_url(conn):
-    """Add source_url column to jobs table if it doesn't exist."""
-    from sqlalchemy import inspect, text
-
-    inspector = inspect(conn)
-    columns = [c["name"] for c in inspector.get_columns("jobs")]
-
-    if "source_url" not in columns:
-        conn.execute(text("ALTER TABLE jobs ADD COLUMN source_url VARCHAR"))
-        import logging
-        logging.getLogger(__name__).info("Migration: added source_url column to jobs table")
-    else:
-        import logging
-        logging.getLogger(__name__).debug("Migration: source_url column already exists")
-
-
-def _migrate_add_pipeline_lock_column(conn):
+async def wait_for_migrated_schema(max_retries: int = 20, retry_delay: float = 3.0):
     """
-    Add pipeline_lock_at column to jobs table if it doesn't exist.
+    Block until the schema Prisma is responsible for creating actually
+    exists, instead of silently continuing and failing later on every
+    query. This does not create or alter anything — it only checks for
+    a column that only exists after the frontend's migrations have run,
+    so a slow frontend container doesn't get raced by the backend on
+    fresh deploys.
 
-    This backs the single-flight lock in pipeline_orchestrator.py that
-    stops multiple run_pipeline() tasks from executing concurrently for
-    the same job (the root cause of the duplicate-stage / stuck-stage
-    bugs — see the pipeline reliability report).
+    Raises if the schema still isn't there after all retries — better
+    to fail loudly on startup than serve traffic against a half-built
+    database.
     """
-    from sqlalchemy import inspect, text
-    import logging
+    last_error: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT pipeline_lock_at FROM jobs LIMIT 0"))
+            logger.info("Database schema verified (Prisma migrations applied)")
+            return
+        except Exception as e:
+            last_error = e
+            logger.info(
+                f"Database schema not ready yet (attempt {attempt}/{max_retries}): {e}"
+            )
+            await asyncio.sleep(retry_delay)
 
-    inspector = inspect(conn)
-    columns = [c["name"] for c in inspector.get_columns("jobs")]
-
-    if "pipeline_lock_at" not in columns:
-        conn.execute(text("ALTER TABLE jobs ADD COLUMN pipeline_lock_at TIMESTAMPTZ"))
-        logging.getLogger(__name__).info("Migration: added pipeline_lock_at column to jobs table")
-    else:
-        logging.getLogger(__name__).debug("Migration: pipeline_lock_at column already exists")
-
-
-def _migrate_dedupe_pipeline_steps(conn):
-    """
-    Remove duplicate (job_id, stage) rows from pipeline_steps BEFORE the
-    unique constraint migration runs, otherwise adding that constraint
-    will fail outright on any database that already has duplicates from
-    the old race condition.
-
-    For each (job_id, stage) group, keeps the "best" row: complete over
-    failed over running over pending, tie-broken by the most recent
-    started_at, then by id. Everything else in the group is deleted.
-    """
-    from sqlalchemy import text
-    import logging
-
-    result = conn.execute(text("""
-        DELETE FROM pipeline_steps
-        WHERE id IN (
-            SELECT id FROM (
-                SELECT
-                    id,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY job_id, stage
-                        ORDER BY
-                            CASE status
-                                WHEN 'complete' THEN 4
-                                WHEN 'failed' THEN 3
-                                WHEN 'running' THEN 2
-                                ELSE 1
-                            END DESC,
-                            started_at DESC NULLS LAST,
-                            id DESC
-                    ) AS rn
-                FROM pipeline_steps
-            ) ranked
-            WHERE rn > 1
-        )
-    """))
-    if result.rowcount:
-        logging.getLogger(__name__).info(
-            f"Migration: removed {result.rowcount} duplicate pipeline_steps row(s)"
-        )
-
-
-def _migrate_add_pipeline_step_unique_constraint(conn):
-    """Add a UNIQUE (job_id, stage) constraint to pipeline_steps if missing."""
-    from sqlalchemy import inspect, text
-    import logging
-
-    inspector = inspect(conn)
-    constraints = inspector.get_unique_constraints("pipeline_steps")
-    existing_names = {c["name"] for c in constraints}
-
-    # Also treat an equivalent constraint under a different name as satisfying this.
-    has_equivalent = any(
-        set(c["column_names"]) == {"job_id", "stage"} for c in constraints
-    )
-
-    if "uq_pipeline_step_job_stage" not in existing_names and not has_equivalent:
-        conn.execute(text(
-            "ALTER TABLE pipeline_steps "
-            "ADD CONSTRAINT uq_pipeline_step_job_stage UNIQUE (job_id, stage)"
-        ))
-        logging.getLogger(__name__).info(
-            "Migration: added uq_pipeline_step_job_stage unique constraint"
-        )
-    else:
-        logging.getLogger(__name__).debug(
-            "Migration: pipeline_steps unique constraint already exists"
-        )
+    raise RuntimeError(
+        "Database schema was never ready. Has the frontend container run "
+        "`prisma migrate deploy` yet? The backend does not create schema "
+        "itself."
+    ) from last_error
 
 
 async def close_db():

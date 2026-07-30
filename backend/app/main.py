@@ -7,15 +7,13 @@ and sets up CORS for the Next.js frontend.
 
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
-from app.database import init_db, close_db, async_session_factory
-from app.models import AppSettings
+from app.database import wait_for_migrated_schema, close_db, async_session_factory
 from app.routers import pipeline, sia, upload, url_import, jobs, clips
 from app.services import sia_client
 
@@ -39,12 +37,12 @@ async def lifespan(app: FastAPI):
     settings.upload_path.mkdir(parents=True, exist_ok=True)
     settings.output_path.mkdir(parents=True, exist_ok=True)
 
-    # Initialize database
-    try:
-        await init_db()
-        logger.info("Database initialized")
-    except Exception as e:
-        logger.warning(f"Database initialization skipped (may not exist yet): {e}")
+    # Wait for the frontend's Prisma migrations to have run. The backend
+    # never creates or alters schema itself — see database.py for why.
+    # This intentionally raises (crashing startup) instead of swallowing
+    # the error, so a missing/behind migration fails loudly here instead
+    # of surfacing later as confusing per-query errors.
+    await wait_for_migrated_schema()
 
     # Initialize Sia client from database (startup fast-path)
     # If a stored AppKey exists on disk, this will connect without user interaction.
