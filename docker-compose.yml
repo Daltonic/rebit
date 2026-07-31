@@ -76,7 +76,7 @@ services:
     environment:
       DATABASE_URL: "postgresql://rebit:rebit@postgres:5432/rebit"
       AUTH_SECRET: "${AUTH_SECRET:-rebit-dev-secret-change-in-production}"
-      AUTH_URL: "http://localhost:3000"
+      # AUTH_URL: "http://localhost:3000"
       BACKEND_URL: "http://backend:8000"
       SIA_MODE: "${SIA_MODE:-auto}"
       SIA_KEY_PATH: "/app/data/sia/appkey.hex"
