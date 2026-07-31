@@ -20,7 +20,7 @@ Upload a video file or paste a direct media URL and watch it move through 6 auto
 - **URL Import**: Import videos from direct media URLs (links ending in .mp4, .webm, .mov, etc.)
 - **Sia Upload**: Source video uploaded to Sia Network as the first pipeline step
 - **Transcription**: Speech-to-text via Whisper (local, no external API)
-- **Highlight Detection**: Multi-strategy heuristic analysis (keyword, position, emotional signals) with optional OpenRouter LLM enhancement
+- **Highlight Detection**: Multi-strategy heuristic analysis (keyword, position, emotional signals)
 - **Clip Extraction**: FFmpeg-based video segment extraction
 - **Vertical Render**: 9:16 format conversion with OpenCV face detection and saliency-based subject tracking
 - **Sia Storage**: All artifacts (transcripts, clips, source video) stored on Sia decentralized network
@@ -53,7 +53,7 @@ Every candidate clip surfaces its score, hook strength, and the emotional signal
 | Pipeline Orchestration | Async Python (asyncio.create_task) with per-job lock                    |
 | Event Bus              | Inngest (optional event-driven triggers)                                |
 | Transcription          | Whisper (local, via CLI or Python module)                               |
-| Highlight Analysis     | Multi-strategy heuristic engine + optional OpenRouter LLM (GPT-4o-mini) |
+| Highlight Analysis     | Multi-strategy heuristic engine                                         |
 | Video Processing       | FFmpeg (async subprocess)                                               |
 | Subject Tracking       | OpenCV (face detection via Haar cascade + saliency detection)           |
 | Storage                | Sia Network via `sia-storage` SDK v0.8.0                                |
@@ -81,7 +81,6 @@ docker compose up --build
 **No environment variables needed.** All configuration is handled through the browser-based Setup Wizard on first boot. Open http://localhost:3000 and complete the 4-step wizard:
 
 1. **Sia Storage** — Configure your Sia indexer URL, App ID, and BIP-39 recovery phrase, then approve the connection via the generated approval URL.
-2. **OpenRouter** — Optionally configure an OpenRouter API key for LLM-enhanced highlight detection.
 3. **Authentication Providers** — Optionally configure Google/GitHub OAuth and WebAuthn passkey settings.
 4. **Sign Up** — Create your account using a passkey (Touch ID, Face ID, security key).
 
@@ -180,7 +179,7 @@ npm run dev
 | Backend  | http://localhost:8000 |
 | Inngest  | http://localhost:8288 |
 
-**First boot:** Open http://localhost:3000 and complete the **Setup Wizard** (Sia → OpenRouter → Providers → Sign Up). See the Docker section above for details on each step.
+**First boot:** Open http://localhost:3000 and complete the **Setup Wizard** (Sia → Providers → Sign Up). See the Docker section above for details on each step.
 
 #### 4. Setup wizard (environment variables it saves)
 
@@ -190,7 +189,6 @@ The wizard persists configuration into the database via these API endpoints:
 | ---------- | ---------------------------- | ------------------------------------------------------------------ |
 | Sia        | `POST /api/setup/sia`        | Indexer URL, App ID, App Name, App Description, recovery phrase    |
 | Sia check  | `POST /api/setup/sia/check`  | Polls for approval completion                                      |
-| OpenRouter | `POST /api/setup/openrouter` | OpenRouter API key                                                 |
 | Providers  | `POST /api/setup/providers`  | OAuth client IDs/secrets, WebAuthn RP ID & Origin                  |
 | Complete   | `POST /api/setup/complete`   | Marks setup as complete, generates auth secret, stores backend URL |
 
@@ -248,7 +246,7 @@ rebit/
 │   ├── app/                    # Next.js App Router — pages + API routes
 │   │   ├── page.tsx            # Landing page (redirects to /projects)
 │   │   ├── login/              # Login page (passkey authentication)
-│   │   ├── setup/              # First-run setup wizard (Sia → OpenRouter → Providers → Sign Up)
+│   │   ├── setup/              # First-run setup wizard (Sia → Providers → Sign Up)
 │   │   ├── projects/           # Project listing & detail + clips view
 │   │   ├── upload/             # Video upload page
 │   │   ├── settings/           # User settings page
@@ -331,8 +329,6 @@ Stage 2 analyzes the transcript using a multi-strategy heuristic engine that eva
 - **Hook strength**: How engaging the opening of each segment is, scored by keyword analysis
 - **Virality score**: Likelihood of being shared, based on position, duration, emotional signals, and sentence structure
 - **Emotional signals**: Sentiment detection across 8 categories (excitement, surprise, urgency, curiosity, authority, positivity, negativity, contrast)
-
-The heuristic engine runs locally and requires no external API keys. If an **OpenRouter API key** is configured, the detection is optionally enhanced with GPT-4o-mini for higher-quality scoring. Nearby segments are merged for natural boundaries, and the top segments by score are selected as clips.
 
 ### Sia Integration
 

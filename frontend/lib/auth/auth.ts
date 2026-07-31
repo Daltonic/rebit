@@ -42,23 +42,43 @@ export function invalidateAuthCache() {
 async function getNextAuth(): Promise<any> {
   if (nextAuthInstance) return nextAuthInstance;
 
-  // Try to read the auth secret from the database first
-  let secret: string | undefined;
-  try {
-    const settings = await prisma.appSettings.findUnique({
-      where: { id: 'default' },
-      select: { authSecret: true },
-    });
-    if (settings?.authSecret) {
-      secret = settings.authSecret;
-    }
-  } catch {
-    // DB unavailable — fall through to env var
-  }
+  // The secret used to sign/verify session JWTs must be byte-identical
+  // in every execution context that touches it. Next.js runs proxy.ts
+  // as a separate module instance from route handlers and server
+  // components — see checkSetupComplete() in proxy.ts for the same
+  // phenomenon. nextAuthInstance above is a module-level cache, so it
+  // is NOT shared between those contexts. If the DB-stored authSecret
+  // ever resolves differently depending on which context queries it
+  // first (e.g. a transient DB error during container boot causing
+  // one instance to fall back to the env var while another
+  // successfully reads the DB), the route handler that encrypts the
+  // OAuth callback cookie and the middleware that decrypts it on every
+  // later page load end up using two different secrets — permanently,
+  // since nothing ever invalidates the middleware's own copy. That's
+  // exactly what "no matching decryption secret" means.
+  //
+  // process.env is process-wide, not module-scoped, so every execution
+  // context reads the identical value regardless of how Next.js splits
+  // the bundles. Checking it first (docker-compose.yml always sets
+  // AUTH_SECRET, with a default fallback) makes that the source of
+  // truth. The DB read only runs as a fallback for setups that never
+  // set the env var — which keeps working for a single-process dev
+  // server, but still carries the cross-instance race described above,
+  // so setting AUTH_SECRET explicitly is the safer choice in production.
+  let secret: string | undefined = process.env.AUTH_SECRET ?? undefined;
 
-  // Fallback to environment variable
   if (!secret) {
-    secret = process.env.AUTH_SECRET ?? undefined;
+    try {
+      const settings = await prisma.appSettings.findUnique({
+        where: { id: 'default' },
+        select: { authSecret: true },
+      });
+      if (settings?.authSecret) {
+        secret = settings.authSecret;
+      }
+    } catch {
+      // DB unavailable — secret stays undefined, mock instance is used
+    }
   }
 
   // If no secret is available at all, return a mock instance.
