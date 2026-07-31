@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma/client';
 import { invalidateSetupCache } from '@/proxy';
+import { invalidateAuthCache } from '@/lib/auth/auth';
 
 /**
  * GET /api/setup/providers
@@ -86,6 +87,13 @@ export async function POST(request: NextRequest) {
     // Invalidate the proxy middleware cache so subsequent requests
     // pick up the new provider status immediately.
     invalidateSetupCache();
+
+    // Invalidate the cached NextAuth instance too. Without this, a
+    // request that hit /api/auth/* before this save (e.g. the login
+    // page fetching providers) would have already built and cached a
+    // NextAuth instance without Google/GitHub, and it would keep
+    // serving that stale instance for the rest of the process's life.
+    invalidateAuthCache();
 
     return NextResponse.json({ ok: true });
   } catch (err) {

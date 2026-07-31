@@ -22,12 +22,22 @@ import { prisma } from '@/lib/prisma/client';
 // but we defer creation until the first `auth()` or `handlers` call.
 let nextAuthInstance:
   | {
-      auth: ReturnType<typeof NextAuth>['auth'];
-      handlers: ReturnType<typeof NextAuth>['handlers'];
-      signIn: ReturnType<typeof NextAuth>['signIn'];
-      signOut: ReturnType<typeof NextAuth>['signOut'];
-    }
+    auth: ReturnType<typeof NextAuth>['auth'];
+    handlers: ReturnType<typeof NextAuth>['handlers'];
+    signIn: ReturnType<typeof NextAuth>['signIn'];
+    signOut: ReturnType<typeof NextAuth>['signOut'];
+  }
   | undefined;
+
+/**
+ * Force the next call to getNextAuth() to rebuild the NextAuth instance
+ * from the current DB-stored settings, instead of reusing a stale one
+ * built before the setup wizard saved OAuth credentials or the auth
+ * secret. Call this any time those values are written to the database.
+ */
+export function invalidateAuthCache() {
+  nextAuthInstance = undefined;
+}
 
 async function getNextAuth(): Promise<any> {
   if (nextAuthInstance) return nextAuthInstance;
