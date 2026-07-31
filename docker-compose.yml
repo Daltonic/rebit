@@ -22,15 +22,17 @@ services:
       retries: 5
 
   # ── Inngest Job Queue ───────────────────────────────────────────────
+  # Local Dev Server, not the self-hosted production server. No signing
+  # or event keys needed — Inngest's own docs say to omit them here.
+  # Trade-off: no persistence, in-memory only, resets on restart. Fine
+  # for this stack's current scale; revisit with `inngest start` (see
+  # git history) if that ever becomes a real problem.
   inngest:
-    image: inngest/inngest:latest
+    image: inngest/inngest:v1.27.0
     container_name: rebit-inngest
     restart: unless-stopped
     ports:
       - "8288:8288"
-    environment:
-      INNGEST_SIGNING_KEY: "${INNGEST_SIGNING_KEY:-rebit-dev-key}"
-      INNGEST_EVENT_API: http://inngest:8288
     command: >
       inngest dev --no-discovery
       --sdk-url http://frontend:3000/api/inngest
@@ -53,12 +55,16 @@ services:
       DEBUG: "${DEBUG:-false}"
       UPLOAD_DIR: "/tmp/rebit/uploads"
       OUTPUT_DIR: "/tmp/rebit/output"
+      INNGEST_DEV: "1"
+      INNGEST_BASE_URL: "http://inngest:8288"
     volumes:
       - task_uploads:/tmp/rebit/uploads
       - task_output:/tmp/rebit/output
       - sia_data:/app/data
     depends_on:
       postgres:
+        condition: service_healthy
+      frontend:
         condition: service_healthy
     restart: unless-stopped
 
@@ -78,14 +84,14 @@ services:
       SIA_MODE: "${SIA_MODE:-auto}"
       SIA_KEY_PATH: "/app/data/sia/appkey.hex"
       SIA_INDEXER_URL: "${SIA_INDEXER_URL:-https://sia.storage}"
+      INNGEST_DEV: "1"
+      INNGEST_BASE_URL: "http://inngest:8288"
     volumes:
       - task_uploads:/tmp/rebit/uploads
       - sia_data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
-      backend:
-        condition: service_started
     restart: unless-stopped
 
 volumes:
