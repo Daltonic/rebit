@@ -54,6 +54,8 @@ services:
       DEBUG: "${DEBUG:-false}"
       UPLOAD_DIR: "/tmp/rebit/uploads"
       OUTPUT_DIR: "/tmp/rebit/output"
+      WHISPER_MODEL: "${WHISPER_MODEL:-base}"
+      WHISPER_DEVICE: "${WHISPER_DEVICE:-cpu}"
     volumes:
       - task_uploads:/tmp/rebit/uploads
       - task_output:/tmp/rebit/output
@@ -76,7 +78,7 @@ services:
     environment:
       DATABASE_URL: "postgresql://rebit:rebit@postgres:5432/rebit"
       AUTH_SECRET: "${AUTH_SECRET:-rebit-dev-secret-change-in-production}"
-      # AUTH_URL: "http://localhost:3000"
+      AUTH_URL: "http://localhost:3000"
       BACKEND_URL: "http://backend:8000"
       SIA_MODE: "${SIA_MODE:-auto}"
       SIA_KEY_PATH: "/app/data/sia/appkey.hex"

@@ -15,6 +15,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
+# Guard against a repeat of the opencv 5.0.0.93 regression, where the
+# wheel silently dropped cv2/data/*.xml and face detection degraded to
+# saliency/center-crop with no error, just a warning buried in per-clip
+# render logs. This makes a missing cascade file a build failure instead
+# of a silent runtime fallback, so a future `pip install -U opencv-*`
+# breaks CI loudly rather than shipping degraded framing to production.
+RUN python3 -c "\
+import cv2, sys; \
+import os; \
+path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'; \
+cascade = cv2.CascadeClassifier(path); \
+sys.exit(0) if not cascade.empty() else sys.exit(f'FATAL: {path} missing or unreadable — face detection will silently fall back to saliency/center-crop. Pin opencv-contrib-python-headless to a version that bundles Haar cascades.')"
+
 # ── Runtime ──────────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
