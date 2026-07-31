@@ -36,7 +36,6 @@ services:
     command: >
       inngest dev --no-discovery
       --sdk-url http://frontend:3000/api/inngest
-      --sdk-url http://backend:8000/api/inngest
 
   # ── Backend (Python FastAPI) ───────────────────────────────────────
   backend:
@@ -55,8 +54,6 @@ services:
       DEBUG: "${DEBUG:-false}"
       UPLOAD_DIR: "/tmp/rebit/uploads"
       OUTPUT_DIR: "/tmp/rebit/output"
-      INNGEST_DEV: "1"
-      INNGEST_BASE_URL: "http://inngest:8288"
     volumes:
       - task_uploads:/tmp/rebit/uploads
       - task_output:/tmp/rebit/output
