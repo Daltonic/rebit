@@ -55,12 +55,14 @@ RUN apk add --no-cache openssl bash wget
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-# Copy public assets (served directly, not part of standalone)
-COPY --from=builder /app/public ./public
-
 # Copy standalone output — use explicit destination path to avoid
 # BuildKit checksum issues with large context transfers
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone /app/.next/standalone
+
+# Copy public assets into the standalone directory (after the main
+# standalone copy so it takes precedence). The standalone server
+# expects `public/` at the same level as `server.js`.
+COPY --from=builder --chown=nextjs:nodejs /app/public /app/.next/standalone/public
 
 # Copy static assets (hashed chunks, CSS, etc.) that the standalone
 # server expects at ./.next/static — but inside standalone, Next.js
@@ -76,6 +78,14 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma /app/.next/s
 # includes production deps, but prisma is a devDependency that we
 # need at runtime for `migrate deploy`.
 COPY --from=builder /app/node_modules /app/.next/standalone/node_modules
+
+# Install Sharp for Next.js production image optimization into the
+# standalone's node_modules so the server can find it at runtime.
+# Must run AFTER the node_modules copy from builder to avoid
+# being overwritten. Without Sharp, images served via the built-in
+# Image Optimization API fail with "The requested resource isn't a
+# valid image received null".
+RUN cd /app/.next/standalone && npm install sharp
 
 # Prisma schema + migrations (needed for prisma migrate deploy at runtime)
 # Stored at lib/prisma/ relative to the app root (see current project layout)

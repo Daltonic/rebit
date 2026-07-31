@@ -225,161 +225,47 @@ If you skip the wizard or Sia is unreachable, the platform runs in **demo mode**
 
 ```
 rebit/
-├── docker-compose.yml            # 4-service orchestration (postgres, inngest, backend, frontend)
+├── docker-compose.yml          # 4-service orchestration (postgres, inngest, backend, frontend)
 ├── README.md
-├── note.txt
-├── docs/                         # Additional documentation
+│
 ├── backend/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── .env.example
 │   ├── app/
-│   │   ├── main.py               # FastAPI server with lifespan Sia init + SSE endpoint
-│   │   ├── config.py             # Pydantic settings (env-based)
-│   │   ├── database.py           # Async SQLAlchemy engine + session factory + migrations
-│   │   ├── models.py             # SQLAlchemy ORM models (mirrors Prisma schema)
-│   │   ├── schemas.py            # Pydantic request/response models
-│   │   ├── routers/
-│   │   │   ├── pipeline.py       # Pipeline stage endpoints (transcribe, detect, extract, render, sia)
-│   │   │   ├── sia.py            # Sia connection status + registration flow
-│   │   │   ├── upload.py         # File upload endpoint
-│   │   │   ├── url_import.py     # Direct media URL import endpoint
-│   │   │   ├── jobs.py           # Job management endpoints (list, get, delete, pipeline status)
-│   │   │   └── clips.py          # Clip serving (Sia + local filesystem with HTTP Range support)
-│   │   └── services/
-│   │       ├── async_subprocess.py    # Non-blocking subprocess runner (ffmpeg, whisper)
-│   │       ├── cleanup.py             # Local file cleanup after Sia storage
-│   │       ├── transcribe.py          # Whisper transcription
-│   │       ├── detect.py              # Highlight detection (heuristic + optional LLM)
-│   │       ├── extract.py             # Clip extraction via ffmpeg
-│   │       ├── render.py              # Vertical rendering with OpenCV subject tracking
-│   │       ├── sia_client.py          # Sia SDK singleton + demo fallback + key persistence
-│   │       ├── sia_upload.py          # Source video Sia upload (pipeline stage 0)
-│   │       ├── sia.py                 # Sia artifact storage (pipeline stage 5)
-│   │       ├── pipeline_orchestrator.py   # 6-stage pipeline coordination with per-job lock
-│   │       ├── pipeline_events.py         # SSE event bus (asyncio queues)
-│   │       └── pipeline_steps.py          # Pipeline step UPSERT + status computation
-│   ├── migrations/
-│   │   └── add_source_url.sql
-│   └── docs/
+│   │   ├── main.py             # FastAPI server entrypoint
+│   │   ├── config.py           # Pydantic settings (env-based)
+│   │   ├── database.py         # Async SQLAlchemy engine + session factory
+│   │   ├── models.py           # SQLAlchemy ORM models
+│   │   ├── schemas.py          # Pydantic request/response models
+│   │   ├── routers/            # API route handlers (pipeline, sia, upload, jobs, clips, url_import)
+│   │   └── services/           # Business logic (transcribe, detect, extract, render, sia, pipeline orchestration, events)
+│   └── migrations/
+│
 ├── frontend/
 │   ├── Dockerfile
-│   ├── .env.example
-│   ├── next.config.ts
-│   ├── tailwind.config.ts
-│   ├── tsconfig.json
 │   ├── package.json
-│   ├── postcss.config.mjs
-│   ├── eslint.config.mjs
-│   ├── prisma.config.ts
-│   ├── proxy.ts                  # Route protection middleware (setup check + auth)
-│   ├── app/
-│   │   ├── globals.css           # Global styles
-│   │   ├── layout.tsx            # Root layout with Sidebar + TopNav
-│   │   ├── page.tsx              # Landing page (redirects to /projects)
-│   │   ├── login/
-│   │   │   └── page.tsx          # Login page (passkey authentication)
-│   │   ├── setup/
-│   │   │   └── page.tsx          # First-run setup wizard (Sia → OpenRouter → Providers → Sign Up)
-│   │   ├── projects/
-│   │   │   ├── page.tsx          # Project listing
-│   │   │   └── [id]/
-│   │   │       ├── page.tsx      # Project detail
-│   │   │       └── clips/
-│   │   │           └── page.tsx  # Clips view
-│   │   ├── upload/
-│   │   │   └── page.tsx          # Video upload page
-│   │   ├── settings/
-│   │   │   └── page.tsx          # User settings
-│   │   ├── unauthorized/
-│   │   │   └── page.tsx          # Unauthorized access page
-│   │   └── api/
-│   │       ├── inngest/
-│   │       │   └── route.ts      # Inngest handler (serves pipeline functions)
-│   │       ├── setup/
-│   │       │   ├── status/       # GET setup completion status
-│   │       │   ├── sia/          # POST Sia configuration
-│   │       │   ├── sia/check/    # POST Sia approval check
-│   │       │   ├── openrouter/   # POST OpenRouter API key
-│   │       │   ├── providers/    # POST OAuth/WebAuthn config
-│   │       │   └── complete/     # POST mark setup complete
-│   │       ├── sia/
-│   │       │   └── status/       # GET Sia connection status
-│   │       ├── config/
-│   │       │   └── backend-url/  # GET backend URL from DB
-│   │       ├── auth/
-│   │       │   ├── [...nextauth]/    # NextAuth handlers
-│   │       │   └── passkey/
-│   │       │       ├── status/       # GET passkey enrollment status
-│   │       │       ├── register/     # POST passkey registration (logged-in)
-│   │       │       │   ├── begin/
-│   │       │       │   └── complete/
-│   │       │       ├── register-first/  # POST first-time passkey registration
-│   │       │       │   ├── begin/
-│   │       │       │   └── complete/
-│   │       │       ├── auth/          # POST passkey authentication
-│   │       │       │   ├── begin/
-│   │       │       │   └── complete/
-│   │       │       └── delete/        # POST delete passkey
-│   │       ├── jobs/
-│   │       │   ├── route.ts           # GET list jobs
-│   │       │   └── [jobId]/
-│   │       │       ├── route.ts       # GET job detail, DELETE job
-│   │       │       ├── start-pipeline/ # POST start/resume pipeline
-│   │       │       ├── events/        # GET SSE stream for pipeline progress
-│   │       │       └── clips/
-│   │       │           └── [segmentId]/
-│   │       │               ├── route.ts       # GET serve clip video
-│   │       │               └── download/      # GET download clip file
-│   │       ├── upload/
-│   │       │   └── route.ts       # POST upload video (proxies to backend)
-│   │       ├── url-import/
-│   │       │   ├── route.ts       # POST import from URL
-│   │       │   └── info/          # POST fetch URL metadata
-│   │       └── health/            # GET health check
-│   ├── components/
-│   │   ├── TopNav.tsx
-│   │   ├── Sidebar.tsx
-│   │   ├── SidebarContext.tsx
-│   │   ├── MainContent.tsx
-│   │   ├── ProjectCard.tsx
-│   │   ├── ClipCard.tsx
-│   │   ├── PipelineTracker.tsx
-│   │   ├── SiaStatus.tsx
-│   │   └── SessionProvider.tsx
-│   ├── lib/
-│   │   ├── config.ts             # DB-backed config (auth secret, backend URL)
-│   │   ├── types/
-│   │   │   └── index.ts          # TypeScript type definitions
-│   │   ├── hooks/
-│   │   │   └── usePipelineSSE.ts # SSE hook for real-time pipeline updates
-│   │   ├── mock/
-│   │   │   └── data.ts           # Mock data for development
-│   │   ├── inngest/
-│   │   │   ├── client.ts         # Inngest client
-│   │   │   └── pipeline.ts       # Inngest pipeline functions (call backend API)
-│   │   ├── sia/
-│   │   │   ├── client.ts         # Sia frontend client
-│   │   │   └── upload.ts         # Sia upload helpers
-│   │   ├── auth/
-│   │   │   ├── auth.config.ts    # NextAuth config (passkey credentials provider)
-│   │   │   ├── auth.ts           # Lazy NextAuth instance (DB-backed secrets)
-│   │   │   ├── guards.ts         # Auth guards for routes and API
-│   │   │   ├── seed.ts           # User seeding script
-│   │   │   └── webauthn.ts       # WebAuthn server-side helpers
-│   │   └── prisma/
-│   │       ├── client.ts         # Prisma client singleton
-│   │       ├── schema.prisma     # Database schema (User, Passkey, Job, Segment, etc.)
-│   │       └── migrations/       # Prisma migrations
-│   ├── types/
-│   │   └── next-auth.d.ts        # NextAuth type extensions
-│   └── public/
-│       ├── file.svg
-│       ├── globe.svg
-│       ├── next.svg
-│       ├── vercel.svg
-│       └── window.svg
-└── note.txt
+│   ├── proxy.ts                # Route protection middleware (setup check + auth)
+│   ├── app/                    # Next.js App Router — pages + API routes
+│   │   ├── page.tsx            # Landing page (redirects to /projects)
+│   │   ├── login/              # Login page (passkey authentication)
+│   │   ├── setup/              # First-run setup wizard (Sia → OpenRouter → Providers → Sign Up)
+│   │   ├── projects/           # Project listing & detail + clips view
+│   │   ├── upload/             # Video upload page
+│   │   ├── settings/           # User settings page
+│   │   └── api/                # Next.js API routes (auth, jobs, setup, sia, upload, url-import, inngest)
+│   ├── components/             # Reusable UI components (TopNav, Sidebar, PipelineTracker, SiaStatus, etc.)
+│   ├── lib/                    # Shared libraries
+│   │   ├── auth/               # NextAuth config, WebAuthn helpers, auth guards
+│   │   ├── prisma/             # Prisma client + schema + migrations
+│   │   ├── inngest/            # Inngest client + pipeline functions
+│   │   ├── sia/                # Frontend Sia client + upload helpers
+│   │   ├── hooks/              # Custom React hooks (usePipelineSSE)
+│   │   ├── types/              # TypeScript type definitions
+│   │   └── mock/               # Mock data for development
+│   ├── types/                  # NextAuth type extensions
+│   └── public/                 # Static assets + screenshots
+│
+└── docs/                       # Additional documentation
 ```
 
 ---
