@@ -1,6 +1,5 @@
-# Rebit
-
-ReBit is a decentralized video clipping engine that transforms long-form videos into captivating short-form vertical clips while ensuring full self-hosting capabilities with storage solutions powered by Sia. Upload a video file or paste a direct media URL, and watch it move through a 6-stage automated processing pipeline that uploads to Sia, transcribes, detects highlights, extracts clips, renders them as vertical 9:16 videos, and stores everything on the Sia Network.
+# Rebit [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+ReBit is a decentralized video clipping engine that transforms long-form videos into captivating short-form vertical clips while ensuring full self-hosting capabilities with storage solutions powered by Sia. Upload an MP4 video file or paste a direct MP4 media URL, and watch it move through a 6-stage automated processing pipeline that uploads to Sia, transcribes, detects highlights, extracts clips, renders them as vertical 9:16 videos, and stores everything on the Sia Network.
 
 ```
 Upload → Sia Upload → Transcribe → Detect → Extract → Render → Sia Storage
@@ -14,10 +13,10 @@ Every stage is an async Python function with per-stage timeouts, progress report
 
 ## What it does
 
-Upload a video file or paste a direct media URL and watch it move through 6 automated processing stages. Each stage updates the pipeline in real-time via Server-Sent Events (SSE), and all artifacts are stored permanently on the Sia Network.
+Upload an MP4 video file or paste a direct MP4 media URL and watch it move through 6 automated processing stages. Each stage updates the pipeline in real-time via Server-Sent Events (SSE), and all artifacts are stored permanently on the Sia Network.
 
-- **File Upload**: Drag-and-drop or file picker for MP4, MOV, WebM, MKV, AVI, FLV, OGV (up to 500 MB)
-- **URL Import**: Import videos from direct media URLs (links ending in .mp4, .webm, .mov, etc.)
+- **File Upload**: Drag-and-drop or file picker for MP4 files (up to 5 GB)
+- **URL Import**: Import videos from direct MP4 media URLs (links ending in .mp4)
 - **Sia Upload**: Source video uploaded to Sia Network as the first pipeline step
 - **Transcription**: Speech-to-text via Whisper (local, no external API)
 - **Highlight Detection**: Multi-strategy heuristic analysis (keyword, position, emotional signals)
@@ -113,7 +112,7 @@ WHISPER_MODEL="base"
 WHISPER_DEVICE="cpu"
 UPLOAD_DIR="data/uploads"
 OUTPUT_DIR="data/output"
-MAX_UPLOAD_SIZE_MB=500
+MAX_UPLOAD_SIZE_MB=5120
 DEBUG=false
 ENV
 ```
@@ -341,7 +340,7 @@ Stage 2 analyzes the transcript using a multi-strategy heuristic engine that eva
 
 ### File Upload Flow
 
-1. User uploads a video file or provides a direct media URL via the frontend upload page.
+1. User uploads an MP4 file or provides a direct MP4 media URL via the frontend upload page.
 2. Frontend proxies the upload to the backend API (with auth context).
 3. Backend saves the video to a shared `task_uploads` Docker volume and creates a Job record.
 4. The pipeline starts automatically in the background via `start_pipeline_task()`.
@@ -350,14 +349,14 @@ Stage 2 analyzes the transcript using a multi-strategy heuristic engine that eva
 
 ### URL Import
 
-Videos can be imported from **direct media URLs only** (links ending in .mp4, .webm, .mov, .mkv, etc.). The process:
+Videos can be imported from **direct media URLs only** (links ending in .mp4). The process:
 
 1. User pastes a URL and clicks "Check URL" to fetch video metadata
 2. The backend probes the URL using multiple strategies (extension check, query parameter analysis, HTTP HEAD/Ranged GET)
 3. User confirms the import, triggering the download with browser-like headers to avoid CDN blocks
 4. Downloaded video is eagerly uploaded to Sia, then enters the same pipeline as file uploads
 
-> **Note:** YouTube, Vimeo, TikTok, and Twitter/X URLs are NOT supported. Only direct media file URLs work.
+> **Note:** Only direct MP4 file URLs are supported. YouTube, Vimeo, TikTok, Twitter/X pages and other video formats are not supported yet.
 
 ### Authentication & Authorization
 
@@ -399,8 +398,16 @@ After the initial launch milestone, the focus will shift to broadening the types
 | Sharing          | Direct sharing to social platforms with embedded metadata      |
 | Webhooks         | Real-time notifications for pipeline events                    |
 | API Access       | Programmatic access to the processing pipeline                 |
+| More Video Formats | Support for MOV, WebM, MKV and other video formats beyond MP4 |
+| Larger Videos      | Support for longer and larger videos, with concurrent job processing |
+| Clip Strategies    | Selectable clip-generation strategies                          |
+| Subtitles & Music  | Subtitles with background music                                |
 
 Each feature will integrate seamlessly with the existing pipeline and Sia storage infrastructure.
+---
+
+## License
+ReBit is released under the [MIT License](./LICENSE).
 
 ---
 
